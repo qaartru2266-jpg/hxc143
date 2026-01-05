@@ -1,0 +1,13 @@
+screens/ui_scrhome.c
+screens/ui_scrcarbon.c
+screens/ui_scrbadge.c
+screens/ui_scrsettings.c
+screens/ui_Calendar.c
+ui.c
+components/ui_comp_hook.c
+ui_helpers.c
+images/ui_img_bingshan1_png.c
+images/ui_img_group_2_png.c
+images/ui_img_1315293343.c
+images/ui_img_2145288589.c
+images/ui_img_wifi_png.c
