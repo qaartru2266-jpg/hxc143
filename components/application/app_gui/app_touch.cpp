@@ -17,25 +17,9 @@ static const char *TAG = "AppTouch";
 TouchClassCST816 touch;   //触控芯片对象（来自 SensorLib，具体芯片兼容 CST8xx 系列）。
 int16_t touch_x[5], touch_y[5];
 
-static void touch_i2c_init(void)   //配置 I2C 主机并安装驱动。
-{
-    i2c_config_t conf = {};
-    conf.mode = I2C_MODE_MASTER;
-    conf.sda_io_num = (gpio_num_t)TOUCH_SDA;
-    conf.scl_io_num = (gpio_num_t)TOUCH_SCL;
-    conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
-    conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
-    conf.master.clk_speed = 100000;
-
-    i2c_param_config(TOUCH_I2C_PORT, &conf);
-    if (i2c_driver_install(TOUCH_I2C_PORT, conf.mode, 0, 0, 0) != ESP_OK) {
-        ESP_LOGW(TAG, "Touch I2C already installed or failed to install");
-    }
-}
 
 // C entry: touch init
 void app_touch_init(void) {
-    touch_i2c_init();  //初始化 I2C。
 
     touch.setPins(TOUCH_RST, TOUCH_INT);//设置触摸芯片的 RST/INT 引脚。
 
