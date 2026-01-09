@@ -20,6 +20,13 @@ dependencies.lock
 .DS_Store
 Thumbs.db
 
+# Local docs
+CO5300_Datasheet_V0.00_20230328(1).pdf
+H0143Y002MT003 V1Removed.pdf
+
 # Python cache
 __pycache__/
 *.py[cod]
+
+CO5300_Datasheet_V0.00_20230328(1).pdf
+H0143Y002MT003 V1Removed.pdf

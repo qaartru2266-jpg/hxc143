@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
 
 #include "driver/gpio.h"
 #include "driver/spi_common.h"
@@ -16,7 +17,9 @@
 
 #include "app_state.h"
 #include "app_sdcard.h"
+#if CONFIG_JOFTMODE_ENABLE_ML
 #include "ml_window.h"
+#endif
 
 #define MOUNT_POINT         "/sdcard"
 #define SDCARD_SPI_HOST     SPI2_HOST
@@ -25,8 +28,8 @@
 #define SDCARD_PIN_SCLK     GPIO_NUM_16
 #define SDCARD_PIN_CS       GPIO_NUM_18
 #define SDCARD_BOOT_KHZ     400
-#define FLUSH_EVERY_LINES   25
-#define FSYNC_EVERY_FLUSH   1
+#define FLUSH_EVERY_LINES   100
+#define FSYNC_EVERY_FLUSH   5
 #define LOGGER_INTERVAL_MS  40
 
 static const char *TAG = "app_sdcard";
@@ -36,6 +39,7 @@ static bool s_mounted = false;
 static sdmmc_card_t *s_card = NULL;
 static FILE *s_csv = NULL;
 static char s_csv_path[64] = {0};
+static char s_csv_buf[4096];
 static bool s_ready = false;
 
 static TaskHandle_t s_logger_task = NULL;
@@ -44,8 +48,10 @@ static int64_t s_last_logged_imu_ts = 0;
 static uint32_t s_lines_since_flush = 0;
 static uint32_t s_flush_since_sync = 0;
 
+#if CONFIG_JOFTMODE_ENABLE_ML
 static ml_result_t s_last_ml;
 static volatile bool s_last_ml_valid = false;
+#endif
 
 static bool s_have_last_gps_snapshot = false;
 static double s_last_lat = 0.0;
@@ -152,7 +158,9 @@ static esp_err_t csv_open_create_header(void)
         return ESP_FAIL;
     }
 
-    setvbuf(s_csv, NULL, _IONBF, 0);
+    if (setvbuf(s_csv, s_csv_buf, _IOFBF, sizeof(s_csv_buf)) != 0) {
+        ESP_LOGW(TAG, "setvbuf failed, continue unbuffered");
+    }
 
     const char *header =
         "date,timestamp,timestamp_ms,latitude,longitude,speed_mps,course_deg,"
@@ -237,6 +245,7 @@ static void append_csv_row(const app_state_imu_sample_t *imu_sample, bool use_gp
             imu_sample->acc_x, imu_sample->acc_y, imu_sample->acc_z,
             imu_sample->gyr_x, imu_sample->gyr_y, imu_sample->gyr_z);
 
+#if CONFIG_JOFTMODE_ENABLE_ML
     ml_result_t r;
     bool have_ml = ml_get_latest_result(&r);
     if (have_ml) {
@@ -247,6 +256,9 @@ static void append_csv_row(const app_state_imu_sample_t *imu_sample, bool use_gp
     } else {
         fprintf(s_csv, ",,,\r\n");
     }
+#else
+    fprintf(s_csv, ",,,\r\n");
+#endif
 
     if (++s_lines_since_flush >= FLUSH_EVERY_LINES) {
         s_lines_since_flush = 0;
@@ -279,15 +291,17 @@ static void logger_step(void)
         update_cached_gps(&gps_snapshot);
     }
 
-    float speed = have_gps ? gps_snapshot.speed : s_last_spd;
-    float course = have_gps ? gps_snapshot.course : s_last_course;
     bool gps_valid = have_gps ? (gps_snapshot.is_valid == 1) : s_have_last_gps_snapshot;
 
+#if CONFIG_JOFTMODE_ENABLE_ML
+    float speed = have_gps ? gps_snapshot.speed : s_last_spd;
+    float course = have_gps ? gps_snapshot.course : s_last_course;
     ml_window_push_sample_raw(
         imu.acc_x, imu.acc_y, imu.acc_z,
         imu.gyr_x, imu.gyr_y, imu.gyr_z,
         gps_valid, speed, course
     );
+#endif
 
     append_csv_row(&imu, gps_valid);
 }
@@ -327,6 +341,7 @@ bool app_sdcard_is_ready(void)
     return s_ready && (s_csv != NULL);
 }
 
+#if CONFIG_JOFTMODE_ENABLE_ML
 bool app_ml_get_latest(ml_result_t *out)
 {
     if (!out || !s_last_ml_valid) {
@@ -335,3 +350,4 @@ bool app_ml_get_latest(ml_result_t *out)
     *out = s_last_ml;
     return true;
 }
+#endif

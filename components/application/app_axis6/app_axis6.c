@@ -11,6 +11,7 @@
 
 static const char* TAG = "axis6";
 static int warmup = 5;   // 跳过前5帧（约200ms），按需调，目前测试下来7帧是最好的
+#define AXIS6_IMU_LOG 0  // set to 1 to enable IMU logs
 
 t_sQMI8658 qmi8658_info;
 
@@ -20,7 +21,9 @@ static void axis6_task(void* arg)
     qmi8658_init();
 
     TickType_t last_wake = xTaskGetTickCount();
+#if !AXIS6_IMU_LOG
     int hb = 0;
+#endif
 
     ESP_LOGW(TAG, "axis6 task started");
 
@@ -43,7 +46,12 @@ static void axis6_task(void* arg)
             app_state_set_imu_sample(&sample);
         }
 
-        if (++hb >= 25) {
+#if AXIS6_IMU_LOG
+        ESP_LOGI(TAG, "imu acc=(%d,%d,%d) gyr=(%d,%d,%d)",
+            qmi8658_info.acc_x, qmi8658_info.acc_y, qmi8658_info.acc_z,
+            qmi8658_info.gyr_x, qmi8658_info.gyr_y, qmi8658_info.gyr_z);
+#else
+        if (++hb >= 200) {
             hb = 0;
             UBaseType_t free_words = uxTaskGetStackHighWaterMark(NULL);
             ESP_LOGW(TAG, "tick acc=(%d,%d,%d) gyr=(%d,%d,%d) stack_free=%u words",
@@ -51,8 +59,9 @@ static void axis6_task(void* arg)
                 qmi8658_info.gyr_x, qmi8658_info.gyr_y, qmi8658_info.gyr_z,
                 (unsigned)free_words);
         }
+#endif
 
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(40)); // 25Hz
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(20)); // 50Hz
     }
 }
 

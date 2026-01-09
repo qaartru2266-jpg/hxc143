@@ -13,9 +13,6 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 
-#include "ml_window.h"    // ml_get_latest_result()
-#include "app_sdcard.h"   
-
 #include <string.h>
 #include <stdio.h>
 #include <time.h>

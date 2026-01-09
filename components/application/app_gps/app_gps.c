@@ -16,9 +16,16 @@ static unsigned char s_read_buf[GPS_BUF_SIZE];
 static char s_line_buf[GPS_BUF_SIZE];
 static size_t s_line_len = 0;
 static gps_parser_t s_parser;
+static TickType_t s_last_nmea_log = 0;
 
 static void dispatch_sentence(const char *line)
 {
+    TickType_t now = xTaskGetTickCount();
+    if (s_last_nmea_log == 0 || (now - s_last_nmea_log) >= pdMS_TO_TICKS(2000)) {
+        ESP_LOGI(TAG, "GPS NMEA: %s", line);
+        s_last_nmea_log = now;
+    }
+
     GNSS_Data parsed = {0};
     if (gps_parser_handle_sentence(&s_parser, line, &parsed)) {
         app_state_set_gps_data(&parsed);
@@ -61,6 +68,8 @@ static void app_gps_task(void *arg)
 {
     gps_parser_init(&s_parser);
     gps_init();
+    // Wait for GNSS power to stabilize before UART traffic.
+    vTaskDelay(pdMS_TO_TICKS(300));
 
     while (1) {
         memset(s_read_buf, 0, sizeof(s_read_buf));

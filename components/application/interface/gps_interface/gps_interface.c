@@ -9,7 +9,7 @@
 #include "gps_interface.h"
 
 
-#define TXD_PIN (GPIO_NUM_8)
+#define TXD_PIN (GPIO_NUM_10)
 #define RXD_PIN (GPIO_NUM_9)
 
 void gps_init(void)
@@ -44,4 +44,3 @@ unsigned int GpsReadData(unsigned char *r_data)
     // return uart_read_bytes(UART_NUM_1, r_data, len, 2 / portTICK_PERIOD_MS);
     return uart_read_bytes(UART_NUM_1, r_data, GPS_BUF_SIZE, 0);
 }
-
