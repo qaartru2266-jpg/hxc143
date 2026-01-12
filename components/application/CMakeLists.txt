@@ -32,4 +32,5 @@ idf_component_register(
         ml
         SensorLib
         esp_timer
+        app_antenna
 )

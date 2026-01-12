@@ -10,6 +10,7 @@
 #include "app_vibration.h"
 #include "app_power.h"
 #include "app_state.h"
+#include "app_antenna.h"
 #include "sdkconfig.h"
 
 #if CONFIG_JOFTMODE_ENABLE_ML
@@ -32,6 +33,8 @@ void app_main(void)
 #endif
 
     app_sdcard_start();
+
+    app_antenna_start();
 
     while (1) vTaskDelay(pdMS_TO_TICKS(1000));
 }
