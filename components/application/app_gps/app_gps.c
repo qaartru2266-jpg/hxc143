@@ -16,6 +16,8 @@ static unsigned char s_read_buf[GPS_BUF_SIZE];
 static char s_line_buf[GPS_BUF_SIZE];
 static size_t s_line_len = 0;
 static gps_parser_t s_parser;
+
+#define GPS_TASK_PERIOD_MS 100
 static TickType_t s_last_nmea_log = 0;
 
 static void dispatch_sentence(const char *line)
@@ -77,7 +79,8 @@ static void app_gps_task(void *arg)
         if (len > 0) {
             process_buffer(s_read_buf, len);
         }
-        vTaskDelay(pdMS_TO_TICKS(100));
+
+        vTaskDelay(pdMS_TO_TICKS(GPS_TASK_PERIOD_MS));
     }
 }
 

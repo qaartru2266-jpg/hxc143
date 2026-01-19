@@ -5,7 +5,6 @@
 #include "driver/uart.h"
 #include "string.h"
 #include "driver/gpio.h"
-
 #include "gps_interface.h"
 
 
