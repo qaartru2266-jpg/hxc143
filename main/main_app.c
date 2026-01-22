@@ -9,6 +9,7 @@
 #include "app_gui.h"
 #include "app_vibration.h"
 #include "app_power.h"
+#include "app_bat_adc.h"
 #include "app_state.h"
 #include "app_antenna.h"
 #include "sdkconfig.h"
@@ -27,6 +28,7 @@ void app_main(void)
     app_gui_start();
 
     app_power_start();
+    app_bat_adc_start();
 
 #if CONFIG_JOFTMODE_ENABLE_ML
     ml_window_init();
