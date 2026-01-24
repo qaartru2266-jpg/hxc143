@@ -253,6 +253,7 @@ static void gui_task(void *arg)
 
     while (1) {
         lv_timer_handler();
+        ui_tick();
 
 
         vTaskDelay(pdMS_TO_TICKS(10));
