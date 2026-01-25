@@ -18,8 +18,9 @@ typedef struct _objects_t {
     lv_obj_t *obj0;
     lv_obj_t *back_main;
     lv_obj_t *current_time;
-    lv_obj_t *symbol_battery;
+    lv_obj_t *bar_battery;
     lv_obj_t *current_date;
+    lv_obj_t *label_battery;
     lv_obj_t *obj1;
     lv_obj_t *obj2;
 } objects_t;

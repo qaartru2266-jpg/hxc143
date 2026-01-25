@@ -1,13 +1,20 @@
 #include "app_bat_adc.h"
 
+#include <stdint.h>
+#include <stdio.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_sleep.h"
 #include "driver/gpio.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
+#include "app_gui.h"
+#include "ui.h"
+#include "vars.h"
 
 #define APP_BAT_ADC_GPIO         GPIO_NUM_8
 #define APP_BAT_ADC_ATTEN        ADC_ATTEN_DB_12
@@ -16,6 +23,9 @@
 #define APP_BAT_ADC_PERIOD_MS    3000
 
 static const char *TAG = "app_bat_adc";
+
+extern int battery_level;
+extern void app_gui_set_flow_var_int(int32_t var_id, int32_t value);
 
 static adc_oneshot_unit_handle_t s_adc_handle;
 static adc_cali_handle_t s_cali_handle;
@@ -118,7 +128,25 @@ static void bat_adc_task(void *arg)
         if (s_calibrated) {
             int vadc_mv = 0;
             if (adc_cali_raw_to_voltage(s_cali_handle, raw_avg, &vadc_mv) == ESP_OK) {
-                float vbat_v = (vadc_mv * 2.0f) / 1000.0f;
+                float vbat_v = (vadc_mv * 2.012f) / 1000.0f;
+                int level = (int)((vbat_v - 3.4f) / (4.2f - 3.4f) * 100.0f);
+
+                if (vbat_v > 4.2f) {
+                    level = 100;
+                } else if (vbat_v < 3.4f) {
+                    level = 0;
+                }
+
+                battery_level = level;
+                if (app_gui_is_ready()) {
+                    app_gui_set_flow_var_int(FLOW_GLOBAL_VARIABLE_BATTERY_LEVEL, level);
+                }
+
+                if (vbat_v < 3.0f) {
+                    ESP_LOGW(TAG, "Low battery, shutdown...");
+                    esp_deep_sleep_start();
+                }
+
                 ESP_LOGI(TAG, "raw_avg=%d, Vadc=%dmV, Vbat=%.3fV", raw_avg, vadc_mv, vbat_v);
             } else {
                 ESP_LOGI(TAG, "raw_avg=%d", raw_avg);

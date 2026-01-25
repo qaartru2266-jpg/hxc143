@@ -8,3 +8,4 @@ esp_err_t app_gui_start(void);
 void app_gui_screen_on(void);
 void app_gui_screen_off(void);
 bool app_gui_screen_is_on(void);
+bool app_gui_is_ready(void);

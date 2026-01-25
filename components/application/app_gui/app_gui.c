@@ -2,6 +2,7 @@
 #include "app_gui.h"
 #include "display_hal.h"
 #include "ui.h"
+#include "vars.h"
 
 
 #include "lvgl.h"
@@ -19,8 +20,11 @@
 
 #include "app_touch.h"
 
+void app_gui_set_flow_var_int(int32_t var_id, int32_t value);
+void app_gui_set_flow_var_string(int32_t var_id, const char *value);
 
 static const char *TAG = "app_gui";
+static volatile bool s_ui_ready = false;
 static display_hal_t s_hal;              //  s_hal：保�?display_hal
 static esp_lcd_panel_handle_t s_panel_handle = NULL;   //屏幕句柄，用于开关屏
 static bool s_screen_on = true;  //屏幕状�?
@@ -38,6 +42,31 @@ static time_t s_clock_epoch = 0;  //时钟时间戳（秒）
 
 extern const lv_image_dsc_t wallpaper1;  //背景图片资源
 #endif
+
+static void update_time_vars(void)
+{
+    static time_t last_update = 0;
+    time_t now = time(NULL);
+    if (now <= 0 || now == last_update) {
+        return;
+    }
+    last_update = now;
+
+    struct tm local_tm;
+    if (!localtime_r(&now, &local_tm)) {
+        return;
+    }
+
+    char time_buf[6] = {0};
+    if (strftime(time_buf, sizeof(time_buf), "%H:%M", &local_tm) > 0) {
+        app_gui_set_flow_var_string(FLOW_GLOBAL_VARIABLE_CURRENT_TIME, time_buf);
+    }
+
+    char date_buf[11] = {0};
+    if (strftime(date_buf, sizeof(date_buf), "%Y/%m/%d", &local_tm) > 0) {
+        app_gui_set_flow_var_string(FLOW_GLOBAL_VARIABLE_CURRENT_DATE, date_buf);
+    }
+}
 
 /* ---------- LVGL tick（v9 要求“返回毫秒”） ---------- */
 static uint32_t lv_tick_cb(void)  //告诉 LVGL “现在的毫秒数”，LVGL 用它处理动画/定时�?
@@ -194,6 +223,7 @@ static void gui_task(void *arg)
     lv_indev_set_read_cb(s_touch_indev, touch_read_cb);       // 设置回调函数
     lv_indev_set_display(s_touch_indev, disp);                // 绑定到当前屏幕
     ui_init();
+    s_ui_ready = true;
 
     // ... 原有�?lv_obj_set_style_bg_color ...
 
@@ -253,6 +283,7 @@ static void gui_task(void *arg)
 
     while (1) {
         lv_timer_handler();
+        update_time_vars();
         ui_tick();
 
 
@@ -291,4 +322,9 @@ void app_gui_screen_off(void)
 bool app_gui_screen_is_on(void)
 {
     return s_screen_on;
+}
+
+bool app_gui_is_ready(void)
+{
+    return s_ui_ready;
 }

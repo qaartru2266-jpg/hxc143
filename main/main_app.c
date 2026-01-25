@@ -12,6 +12,7 @@
 #include "app_bat_adc.h"
 #include "app_state.h"
 #include "app_antenna.h"
+#include "app_time.h"
 #include "sdkconfig.h"
 
 #if CONFIG_JOFTMODE_ENABLE_ML
@@ -22,6 +23,7 @@ void app_main(void)
 {
     app_state_init();
     app_vibration_init();
+    app_time_start();
 
     app_axis6_start();
     app_gps_start();
@@ -37,6 +39,7 @@ void app_main(void)
     app_sdcard_start();
 
     app_antenna_start();
+    app_antenna_set_wifi_enabled(true);
 
     while (1) vTaskDelay(pdMS_TO_TICKS(1000));
 }

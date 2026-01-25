@@ -15,6 +15,7 @@
 #include "nvs_flash.h"
 
 #include "app_antenna.h"
+#include "app_time.h"
 
 #if defined(CONFIG_BT_ENABLED) && CONFIG_BT_ENABLED
 #define APP_ANTENNA_ENABLE_BLE 1
@@ -30,6 +31,9 @@
 #endif
 
 #define WIFI_SCAN_INTERVAL_MS 30000
+#define WIFI_SSID "meizu"
+#define WIFI_PASS "123456785"
+#define SNTP_SERVER "ntp.aliyun.com"
 #define BLE_DEVICE_NAME "shanruishanrui"
 #define TIME_VALID_EPOCH 1700000000
 
@@ -39,6 +43,9 @@ static volatile bool s_wifi_enabled = false;
 static volatile bool s_ble_enabled = false;
 static bool s_wifi_inited = false;
 static bool s_wifi_started = false;
+static bool s_wifi_connected = false;
+static bool s_wifi_connecting = false;
+static bool s_wifi_event_registered = false;
 #if APP_ANTENNA_ENABLE_BLE
 static bool s_ble_inited = false;
 static bool s_ble_bluedroid_inited = false;
@@ -47,6 +54,7 @@ static bool s_ble_adv_active = false;
 #endif
 static bool s_sntp_enabled = false;
 static bool s_sntp_inited = false;
+static TaskHandle_t s_sntp_monitor_task = NULL;
 static bool s_time_valid = false;
 static app_antenna_time_source_t s_time_source = APP_ANTENNA_TIME_SOURCE_NONE;
 static uint16_t s_last_scan_count = 0;
@@ -96,9 +104,44 @@ static void netif_init_once(void)
     s_netif_inited = true;
 }
 
+static void wifi_event_handler(void *arg, esp_event_base_t event_base,
+                               int32_t event_id, void *event_data)
+{
+    (void)arg;
+    (void)event_data;
+
+    if (event_base == WIFI_EVENT) {
+        switch (event_id) {
+        case WIFI_EVENT_STA_START:
+            if (s_wifi_enabled) {
+                s_wifi_connecting = true;
+                esp_wifi_connect();
+            }
+            break;
+        case WIFI_EVENT_STA_DISCONNECTED:
+            s_wifi_connected = false;
+            s_wifi_connecting = false;
+            if (s_wifi_enabled) {
+                ESP_LOGW(TAG, "Wi-Fi disconnected, retrying");
+                s_wifi_connecting = true;
+                esp_wifi_connect();
+            }
+            break;
+        default:
+            break;
+        }
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+        s_wifi_connected = true;
+        s_wifi_connecting = false;
+        ESP_LOGI(TAG, "Wi-Fi connected, IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        app_antenna_sntp_set_enabled(true);
+    }
+}
+
 static void wifi_scan_once(void)
 {
-    if (!s_wifi_enabled || !s_wifi_started) {
+    if (!s_wifi_enabled || !s_wifi_started || s_wifi_connected || s_wifi_connecting) {
         return;
     }
 
@@ -207,6 +250,24 @@ static void wifi_init(void)
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+
+    wifi_config_t wifi_config = {0};
+    strncpy((char *)wifi_config.sta.ssid, WIFI_SSID, sizeof(wifi_config.sta.ssid));
+    strncpy((char *)wifi_config.sta.password, WIFI_PASS, sizeof(wifi_config.sta.password));
+    wifi_config.sta.ssid[sizeof(wifi_config.sta.ssid) - 1] = '\0';
+    wifi_config.sta.password[sizeof(wifi_config.sta.password) - 1] = '\0';
+    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    wifi_config.sta.pmf_cfg.capable = true;
+    wifi_config.sta.pmf_cfg.required = false;
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+
+    if (!s_wifi_event_registered) {
+        ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
+                                                   &wifi_event_handler, NULL));
+        ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+                                                   &wifi_event_handler, NULL));
+        s_wifi_event_registered = true;
+    }
     s_wifi_inited = true;
 }
 
@@ -285,10 +346,50 @@ static void ble_disable(void)
 
 static void sntp_time_sync_cb(struct timeval *tv)
 {
-    (void)tv;
     s_time_valid = true;
     s_time_source = APP_ANTENNA_TIME_SOURCE_SNTP;
-    ESP_LOGI(TAG, "SNTP time synced");
+    if (tv) {
+        app_time_set_unix(tv->tv_sec, APP_TIME_SOURCE_SNTP);
+    }
+    app_time_save_now();
+    ESP_LOGI(TAG, "SNTP time synced: %lld", tv ? (long long)tv->tv_sec : -1LL);
+}
+
+static void sntp_monitor_task(void *arg)
+{
+    (void)arg;
+    const TickType_t wait_ticks = pdMS_TO_TICKS(15000);
+
+    while (s_sntp_enabled) {
+        esp_err_t err = esp_netif_sntp_sync_wait(wait_ticks);
+        if (!s_sntp_enabled) {
+            break;
+        }
+
+        if (err == ESP_OK) {
+            unsigned int reachability = 0;
+            if (esp_netif_sntp_reachability(0, &reachability) == ESP_OK) {
+                ESP_LOGI(TAG, "SNTP sync ok, reachability: 0x%02x", reachability);
+            } else {
+                ESP_LOGI(TAG, "SNTP sync ok");
+            }
+            break;
+        } else if (err == ESP_ERR_NOT_FINISHED) {
+            ESP_LOGW(TAG, "SNTP sync in progress");
+        } else if (err == ESP_ERR_TIMEOUT) {
+            unsigned int reachability = 0;
+            if (esp_netif_sntp_reachability(0, &reachability) == ESP_OK) {
+                ESP_LOGW(TAG, "SNTP sync timeout, reachability: 0x%02x", reachability);
+            } else {
+                ESP_LOGW(TAG, "SNTP sync timeout");
+            }
+        } else {
+            ESP_LOGW(TAG, "SNTP sync wait failed: %s", esp_err_to_name(err));
+        }
+    }
+
+    s_sntp_monitor_task = NULL;
+    vTaskDelete(NULL);
 }
 
 void app_antenna_set_wifi_enabled(bool enabled)
@@ -304,13 +405,19 @@ void app_antenna_set_wifi_enabled(bool enabled)
             s_wifi_started = true;
         }
         s_wifi_enabled = true;
+        s_wifi_connecting = true;
+        esp_wifi_connect();
 
         if (!s_wifi_task) {
             xTaskCreate(wifi_scan_task, "app_antenna_wifi", 4096, NULL, 5, &s_wifi_task);
         }
     } else {
         s_wifi_enabled = false;
+        s_wifi_connected = false;
+        s_wifi_connecting = false;
+        app_antenna_sntp_set_enabled(false);
         if (s_wifi_started) {
+            esp_wifi_disconnect();
             esp_err_t err = esp_wifi_stop();
             if (err != ESP_OK) {
                 ESP_LOGW(TAG, "Wi-Fi stop failed: %s", esp_err_to_name(err));
@@ -367,22 +474,34 @@ void app_antenna_sntp_set_enabled(bool enabled)
     if (enabled) {
         netif_init_once();
         if (!s_sntp_inited) {
-            esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+            ESP_LOGI(TAG, "SNTP init with server: %s", SNTP_SERVER);
+            esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG(SNTP_SERVER);
             config.sync_cb = sntp_time_sync_cb;
-            config.wait_for_sync = false;
+            config.wait_for_sync = true;
             esp_err_t err = esp_netif_sntp_init(&config);
             if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
                 ESP_LOGW(TAG, "SNTP init failed: %s", esp_err_to_name(err));
                 return;
             }
             s_sntp_inited = true;
+            ESP_LOGI(TAG, "SNTP started");
         } else {
+            ESP_LOGI(TAG, "SNTP restart");
             esp_netif_sntp_start();
+        }
+
+        if (!s_sntp_monitor_task) {
+            xTaskCreate(sntp_monitor_task, "app_sntp_mon", 3072, NULL, 5, &s_sntp_monitor_task);
         }
     } else {
         if (s_sntp_inited) {
+            ESP_LOGI(TAG, "SNTP stopped");
             esp_netif_sntp_deinit();
             s_sntp_inited = false;
+        }
+        if (s_sntp_monitor_task) {
+            vTaskDelete(s_sntp_monitor_task);
+            s_sntp_monitor_task = NULL;
         }
     }
 }

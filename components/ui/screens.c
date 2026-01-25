@@ -100,12 +100,12 @@ void create_screen_main_page() {
             lv_label_set_text(obj, "");
         }
         {
-            // SYMBOL_BATTERY
+            // bar_battery
             lv_obj_t *obj = lv_bar_create(parent_obj);
-            objects.symbol_battery = obj;
-            lv_obj_set_pos(obj, 208, 79);
+            objects.bar_battery = obj;
+            lv_obj_set_pos(obj, 197, 79);
             lv_obj_set_size(obj, 50, 10);
-            lv_bar_set_value(obj, 25, LV_ANIM_OFF);
+            lv_bar_set_range(obj, 1, 100);
             lv_obj_add_flag(obj, LV_OBJ_FLAG_SCROLL_ON_FOCUS|LV_OBJ_FLAG_SCROLLABLE|LV_OBJ_FLAG_SCROLL_ONE);
             lv_obj_clear_flag(obj, LV_OBJ_FLAG_CLICKABLE);
             lv_obj_set_scrollbar_mode(obj, LV_SCROLLBAR_MODE_ON);
@@ -134,7 +134,7 @@ void create_screen_main_page() {
             lv_obj_set_style_text_color(obj, lv_color_hex(0xffffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_text_font(obj, &lv_font_montserrat_30, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_text_letter_space(obj, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_label_set_text(obj, "2026-01-20 ");
+            lv_label_set_text(obj, "");
         }
         {
             lv_obj_t *obj = lv_arc_create(parent_obj);
@@ -163,6 +163,14 @@ void create_screen_main_page() {
                 }
             }
         }
+        {
+            // label_battery
+            lv_obj_t *obj = lv_label_create(parent_obj);
+            objects.label_battery = obj;
+            lv_obj_set_pos(obj, 248, 76);
+            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_label_set_text(obj, "");
+        }
     }
     
     tick_screen_main_page();
@@ -172,9 +180,10 @@ void delete_screen_main_page() {
     lv_obj_delete(objects.main_page);
     objects.main_page = 0;
     objects.current_time = 0;
-    objects.symbol_battery = 0;
+    objects.bar_battery = 0;
     objects.current_date = 0;
     objects.test = 0;
+    objects.label_battery = 0;
     deletePageFlowState(0);
 }
 
@@ -187,6 +196,33 @@ void tick_screen_main_page() {
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.current_time;
             lv_label_set_text(objects.current_time, new_val);
+            tick_value_change_obj = NULL;
+        }
+    }
+    {
+        int32_t new_val = evalIntegerProperty(flowState, 2, 3, "Failed to evaluate Value in Bar widget");
+        int32_t cur_val = lv_bar_get_value(objects.bar_battery);
+        if (new_val != cur_val) {
+            tick_value_change_obj = objects.bar_battery;
+            lv_bar_set_value(objects.bar_battery, new_val, LV_ANIM_OFF);
+            tick_value_change_obj = NULL;
+        }
+    }
+    {
+        const char *new_val = evalTextProperty(flowState, 3, 3, "Failed to evaluate Text in Label widget");
+        const char *cur_val = lv_label_get_text(objects.current_date);
+        if (strcmp(new_val, cur_val) != 0) {
+            tick_value_change_obj = objects.current_date;
+            lv_label_set_text(objects.current_date, new_val);
+            tick_value_change_obj = NULL;
+        }
+    }
+    {
+        const char *new_val = evalTextProperty(flowState, 7, 3, "Failed to evaluate Text in Label widget");
+        const char *cur_val = lv_label_get_text(objects.label_battery);
+        if (strcmp(new_val, cur_val) != 0) {
+            tick_value_change_obj = objects.label_battery;
+            lv_label_set_text(objects.label_battery, new_val);
             tick_value_change_obj = NULL;
         }
     }
@@ -425,7 +461,7 @@ void tick_screen_chart_page() {
 
 
 static const char *screen_names[] = { "main_page", "control_page", "test_page", "about_page", "calendar_page", "chart_page" };
-static const char *object_names[] = { "main_page", "control_page", "test_page", "about_page", "calendar_page", "chart_page", "test", "obj0", "back_main", "current_time", "symbol_battery", "current_date", "obj1", "obj2" };
+static const char *object_names[] = { "main_page", "control_page", "test_page", "about_page", "calendar_page", "chart_page", "test", "obj0", "back_main", "current_time", "bar_battery", "current_date", "label_battery", "obj1", "obj2" };
 
 
 typedef void (*create_screen_func_t)();

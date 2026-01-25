@@ -5,6 +5,7 @@ set(EXTRA_COMPONENT_DIRS
     "${CMAKE_CURRENT_LIST_DIR}/components/drivers/display_hal"
     "${CMAKE_CURRENT_LIST_DIR}/components/drivers/esp_lcd_sh8601"
     "${CMAKE_CURRENT_LIST_DIR}/components/application/app_antenna"
+    "${CMAKE_CURRENT_LIST_DIR}/components/application/app_time"
     "${CMAKE_CURRENT_LIST_DIR}/components/application/app_bat_adc"
 )
 

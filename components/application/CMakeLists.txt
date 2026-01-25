@@ -5,6 +5,7 @@ idf_component_register(
         "app_gps/app_gps_parser.c"
         "app_sdcard/app_sdcard.c"
         "app_gui/app_gui.c"
+        "app_gui/app_gui_flow_bridge.cpp"
         "app_gui/app_touch.cpp"
         "app_gui/assets/wallpaper_image.c"
         "app_vibration/app_vibration.c"
@@ -33,4 +34,5 @@ idf_component_register(
         SensorLib
         esp_timer
         app_antenna
+        app_time
 )
