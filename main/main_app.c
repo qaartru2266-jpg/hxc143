@@ -3,7 +3,13 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 
-#include "app_sdcard.h"
+#include "app_datalog.h"
+
+#define ENABLE_MOCK_TEST 0
+
+#if ENABLE_MOCK_TEST
+#include "app_logic.h"
+#endif
 #include "app_axis6.h"
 #include "app_gps.h"
 #include "app_gui.h"
@@ -36,7 +42,13 @@ void app_main(void)
     ml_window_init();
 #endif
 
-    app_sdcard_start();
+    app_datalog_start();
+    printf("MODE: DATA_COLLECTION (MOCK disabled)\n");
+    printf("DATALOG: raw logging enabled\n");
+
+#if ENABLE_MOCK_TEST
+    app_logic_start();
+#endif
 
     app_antenna_start();
     app_antenna_set_wifi_enabled(true);

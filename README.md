@@ -1,13 +1,73 @@
-Core Changes
+# EcoStep 项目说明 (ESP32-S3 / ESP-IDF)
 
-Added a thread-safe data hub so IMU/GPS writers and consumers stop sharing globals (components/application/app_state/app_state.c (line 15), header in app_state/include/app_state.h (line 5)). app_axis6 now just samples and posts to the hub (components/application/app_axis6/app_axis6.c (line 8) & :43) while app_sdcard owns a dedicated 25 Hz logger task (components/application/app_sdcard/app_sdcard.c (line 191) & :261) that also feeds ml_window. app_main bootstraps the hub once (main/main_app.c (line 12) & :20). This removes the SD-card jitter your collaborator flagged.
-Refined the GPS stack: parsing lives in its own module with checksum protection and safe token copies (components/application/app_gps/app_gps_parser.c (line 20)–:352) and the runtime task only streams UART data into that parser (components/application/app_gps/app_gps.c (line 30)). The new app_gps.h (line 1) exposes a clean GNSS_Data while current_data/Deal_Data are gone.
-Build/resource cleanup: main/CMakeLists.txt (line 1) now builds only main_app.c, application CMake pulls in the relocated wallpaper asset (components/application/CMakeLists.txt (line 5), file moved to components/application/app_gui/assets/wallpaper_image.c). I removed the unused temp_app_gui.txt and the entire components/drivers/esp_lcd_sh8601/test_apps/ tree per your request.
-GUI polishing: dormant #if 0 blocks are gone from components/application/app_gui/app_gui.c (line 1) so only the live wallpaper/clock code remains, and all ML preview stubs were removed.
-Hardware config is menuconfig-driven now: main/Kconfig.projbuild (line 1) defines the new JOFTMODE_* knobs, which feed directly into the I²C driver (components/application/interface/axis6_interface/axis6_interface.c (line 22)) and the power-button handler (components/application/app_power/app_power.c (line 11)).
-Next Steps
+## 项目简介
+EcoStep 是一款基于 ESP32-S3 的个人碳足迹监测设备，当前阶段以稳定、长期的数据采集为核心目标。系统会将 25Hz IMU 与 1Hz GPS 数据统一落盘到 SD 卡，方便后续训练与分析。
 
-Re-run idf.py menuconfig (or edit sdkconfig) to set the new JOFTMODE_* GPIO/frequency defaults, then rebuild with idf.py build to regenerate the binary and updated sdkconfig.
-Flash/monitor on hardware to verify SD logging cadence, GPS parsing, and the GUI wallpaper asset that now lives inside the app component.
-(Optional) add unit/system tests for the new parser/logger paths once you confirm the runtime behavior.
-Let me know if you want me to tackle further cleanups or help validate on hardware.
+## 运行模式
+- 数据采集模式 (Data Collection)：默认启动，仅写入 Raw Log，不自动生成 events/summary。
+- Mock 模式：仅用于验证状态机逻辑，本阶段已关闭。
+
+启动串口会看到：
+```
+MODE: DATA_COLLECTION (MOCK disabled)
+DATALOG: raw logging enabled
+```
+
+## SD 卡日志结构
+日志按天分目录存储：
+```
+/sdcard/YYYYMMDD/
+  raw_HH.csv
+  events.csv
+  summary.csv
+```
+
+当前数据采集阶段主要写入 `raw_HH.csv`，events/summary 仅在上层逻辑主动调用时写入。
+
+### Raw Log (raw_HH.csv)
+- 按小时分片，例如 `raw_09.csv`
+- Header:
+```
+datetime_local,uptime_ms,acc_x,acc_y,acc_z,gyro_x,gyro_y,gyro_z,speed_mps,turn_rate_deg_s,gps_valid
+```
+
+### Events Log (events.csv)
+由 Traffic State Machine 生成（当前模式不自动写入）：
+```
+start_time,end_time,start_uptime_ms,end_uptime_ms,duration_sec,mode,avg_speed_mps
+```
+
+### Summary Log (summary.csv)
+按天汇总（当前模式不自动写入），最后一行为 TOTAL 汇总：
+```
+mode,total_duration_min,carbon_factor_g_per_min,co2_g
+```
+
+## 构建与烧录
+1. 进入工程目录：
+```
+cd S:\esp32\JofTmode scr change\hxc143
+```
+2. 构建：
+```
+idf.py build
+```
+3. 烧录：
+```
+idf.py -p PORT flash
+```
+
+如果你使用的是独立 ESP-IDF 工具链，请确保 `cmake`、`ninja` 与 xtensa 工具链已加入 PATH，或使用 IDF 的 `export` 脚本初始化环境。
+
+## 数据采集注意事项
+- 建议在正式采集前清理或备份 SD 卡旧数据，避免不同阶段数据混淆。
+- 采集期间 `uptime_ms` 应持续单调递增（除非设备重启）。
+- 目前不启动 mock，不应产生新的 events/summary 行。
+
+## 组件说明
+- `app_datalog`：SD 卡数据落盘（Raw/Event/Summary）。
+- `app_logic`：交通状态机与 Mock 脚本（当前不启动）。
+- `app_state`：IMU/GPS 数据中枢。
+- `app_axis6` / `app_gps`：传感器数据采集。
+
+如需恢复 Mock 逻辑测试，可在 `main/main_app.c` 中开启 `ENABLE_MOCK_TEST` 并调用 `app_logic_start()`。

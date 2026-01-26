@@ -46,17 +46,6 @@ static void event_handler_cb_control_page_control_page(lv_event_t *e) {
     }
 }
 
-static void event_handler_cb_control_page_obj0(lv_event_t *e) {
-    lv_event_code_t event = lv_event_get_code(e);
-    void *flowState = lv_event_get_user_data(e);
-    (void)flowState;
-    
-    if (event == LV_EVENT_VALUE_CHANGED) {
-        e->user_data = (void *)0;
-        flowPropagateValueLVGLEvent(flowState, -1, 7, e);
-    }
-}
-
 static void event_handler_cb_about_page_back_main(lv_event_t *e) {
     lv_event_code_t event = lv_event_get_code(e);
     void *flowState = lv_event_get_user_data(e);
@@ -171,6 +160,12 @@ void create_screen_main_page() {
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
             lv_label_set_text(obj, "");
         }
+        {
+            lv_obj_t *obj = lv_label_create(parent_obj);
+            lv_obj_set_pos(obj, 371, 218);
+            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_label_set_text(obj, "state\n");
+        }
     }
     
     tick_screen_main_page();
@@ -240,34 +235,15 @@ void create_screen_control_page() {
     {
         lv_obj_t *parent_obj = obj;
         {
-            lv_obj_t *obj = lv_switch_create(parent_obj);
-            objects.obj0 = obj;
-            lv_obj_set_pos(obj, 208, 221);
-            lv_obj_set_size(obj, 50, 25);
-            lv_obj_add_event_cb(obj, event_handler_cb_control_page_obj0, LV_EVENT_ALL, flowState);
-        }
-        {
             lv_obj_t *obj = lv_slider_create(parent_obj);
-            lv_obj_set_pos(obj, 158, 129);
-            lv_obj_set_size(obj, 150, 10);
-            lv_slider_set_value(obj, 25, LV_ANIM_OFF);
-        }
-        {
-            lv_obj_t *obj = lv_slider_create(parent_obj);
-            lv_obj_set_pos(obj, 158, 319);
-            lv_obj_set_size(obj, 150, 10);
+            lv_obj_set_pos(obj, 131, 272);
+            lv_obj_set_size(obj, 247, 22);
             lv_slider_set_value(obj, 25, LV_ANIM_OFF);
         }
         {
             lv_obj_t *obj = lv_switch_create(parent_obj);
-            lv_obj_set_pos(obj, 323, 221);
-            lv_obj_set_size(obj, 50, 25);
-        }
-        {
-            lv_obj_t *obj = lv_bar_create(parent_obj);
-            lv_obj_set_pos(obj, 158, 59);
-            lv_obj_set_size(obj, 150, 10);
-            lv_bar_set_value(obj, 25, LV_ANIM_OFF);
+            lv_obj_set_pos(obj, 242, 105);
+            lv_obj_set_size(obj, 85, 47);
         }
     }
     
@@ -277,7 +253,6 @@ void create_screen_control_page() {
 void delete_screen_control_page() {
     lv_obj_delete(objects.control_page);
     objects.control_page = 0;
-    objects.obj0 = 0;
     deletePageFlowState(1);
 }
 
@@ -296,25 +271,22 @@ void create_screen_test_page() {
     {
         lv_obj_t *parent_obj = obj;
         {
-            lv_obj_t *obj = lv_arc_create(parent_obj);
-            lv_obj_set_pos(obj, 39, 40);
-            lv_obj_set_size(obj, 389, 386);
-            lv_arc_set_value(obj, 25);
-        }
-        {
-            lv_obj_t *obj = lv_button_create(parent_obj);
-            lv_obj_set_pos(obj, 192, 233);
-            lv_obj_set_size(obj, 100, 50);
+            lv_obj_t *obj = lv_list_create(parent_obj);
+            lv_obj_set_pos(obj, 143, 122);
+            lv_obj_set_size(obj, 180, 100);
+            lv_obj_set_style_layout(obj, LV_LAYOUT_GRID, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_flex_flow(obj, LV_FLEX_FLOW_ROW, LV_PART_MAIN | LV_STATE_DEFAULT);
             {
-                lv_obj_t *parent_obj = obj;
-                {
-                    lv_obj_t *obj = lv_label_create(parent_obj);
-                    lv_obj_set_pos(obj, 0, 0);
-                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_label_set_text(obj, "Button");
-                }
+                static lv_coord_t dsc[] = {LV_GRID_TEMPLATE_LAST};
+                lv_obj_set_style_grid_row_dsc_array(obj, dsc, LV_PART_MAIN | LV_STATE_DEFAULT);
             }
+            {
+                static lv_coord_t dsc[] = {LV_GRID_TEMPLATE_LAST};
+                lv_obj_set_style_grid_column_dsc_array(obj, dsc, LV_PART_MAIN | LV_STATE_DEFAULT);
+            }
+            lv_obj_set_style_flex_main_place(obj, LV_FLEX_ALIGN_START, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_flex_cross_place(obj, LV_FLEX_ALIGN_START, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_flex_track_place(obj, LV_FLEX_ALIGN_END, LV_PART_MAIN | LV_STATE_DEFAULT);
         }
     }
     
@@ -344,7 +316,7 @@ void create_screen_about_page() {
         lv_obj_t *parent_obj = obj;
         {
             lv_obj_t *obj = lv_qrcode_create(parent_obj);
-            objects.obj1 = obj;
+            objects.obj0 = obj;
             lv_obj_set_pos(obj, 153, 153);
             lv_obj_set_size(obj, 160, 160);
             lv_qrcode_set_size(obj, 160);
@@ -379,7 +351,7 @@ void create_screen_about_page() {
 void delete_screen_about_page() {
     lv_obj_delete(objects.about_page);
     objects.about_page = 0;
-    objects.obj1 = 0;
+    objects.obj0 = 0;
     objects.back_main = 0;
     deletePageFlowState(3);
 }
@@ -401,7 +373,7 @@ void create_screen_calendar_page() {
         lv_obj_t *parent_obj = obj;
         {
             lv_obj_t *obj = lv_calendar_create(parent_obj);
-            objects.obj2 = obj;
+            objects.obj1 = obj;
             lv_obj_set_pos(obj, 58, 66);
             lv_obj_set_size(obj, 350, 350);
             lv_calendar_header_arrow_create(obj);
@@ -419,7 +391,7 @@ void create_screen_calendar_page() {
 void delete_screen_calendar_page() {
     lv_obj_delete(objects.calendar_page);
     objects.calendar_page = 0;
-    objects.obj2 = 0;
+    objects.obj1 = 0;
     deletePageFlowState(4);
 }
 
@@ -459,9 +431,32 @@ void tick_screen_chart_page() {
     (void)flowState;
 }
 
+void create_screen_menu_page() {
+    void *flowState = getFlowState(0, 6);
+    (void)flowState;
+    lv_obj_t *obj = lv_obj_create(0);
+    objects.menu_page = obj;
+    lv_obj_set_pos(obj, 0, 0);
+    lv_obj_set_size(obj, 466, 466);
+    lv_obj_set_style_bg_color(obj, lv_color_hex(0xff000000), LV_PART_MAIN | LV_STATE_DEFAULT);
+    
+    tick_screen_menu_page();
+}
 
-static const char *screen_names[] = { "main_page", "control_page", "test_page", "about_page", "calendar_page", "chart_page" };
-static const char *object_names[] = { "main_page", "control_page", "test_page", "about_page", "calendar_page", "chart_page", "test", "obj0", "back_main", "current_time", "bar_battery", "current_date", "label_battery", "obj1", "obj2" };
+void delete_screen_menu_page() {
+    lv_obj_delete(objects.menu_page);
+    objects.menu_page = 0;
+    deletePageFlowState(6);
+}
+
+void tick_screen_menu_page() {
+    void *flowState = getFlowState(0, 6);
+    (void)flowState;
+}
+
+
+static const char *screen_names[] = { "main_page", "control_page", "test_page", "about_page", "calendar_page", "chart_page", "menu_page" };
+static const char *object_names[] = { "main_page", "control_page", "test_page", "about_page", "calendar_page", "chart_page", "menu_page", "test", "back_main", "current_time", "bar_battery", "current_date", "label_battery", "obj0", "obj1" };
 
 
 typedef void (*create_screen_func_t)();
@@ -472,6 +467,7 @@ create_screen_func_t create_screen_funcs[] = {
     create_screen_about_page,
     create_screen_calendar_page,
     create_screen_chart_page,
+    create_screen_menu_page,
 };
 void create_screen(int screen_index) {
     create_screen_funcs[screen_index]();
@@ -488,6 +484,7 @@ delete_screen_func_t delete_screen_funcs[] = {
     delete_screen_about_page,
     delete_screen_calendar_page,
     delete_screen_chart_page,
+    delete_screen_menu_page,
 };
 void delete_screen(int screen_index) {
     delete_screen_funcs[screen_index]();
@@ -504,6 +501,7 @@ tick_screen_func_t tick_screen_funcs[] = {
     tick_screen_about_page,
     tick_screen_calendar_page,
     tick_screen_chart_page,
+    tick_screen_menu_page,
 };
 void tick_screen(int screen_index) {
     tick_screen_funcs[screen_index]();
@@ -524,4 +522,5 @@ void create_screens() {
     lv_disp_set_theme(dispp, theme);
     
     create_screen_main_page();
+    create_screen_menu_page();
 }
