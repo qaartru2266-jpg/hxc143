@@ -20,6 +20,8 @@ static unsigned char s_read_buf[GPS_BUF_SIZE];
 static char s_line_buf[GPS_BUF_SIZE];
 static size_t s_line_len = 0;
 static gps_parser_t s_parser;
+static TaskHandle_t s_gps_task = NULL;
+static volatile bool s_gps_enabled = true;
 
 #define GPS_TASK_PERIOD_MS 100
 #define GPS_TIME_SYNC_THRESHOLD_SEC 60
@@ -167,6 +169,10 @@ static void app_gps_task(void *arg)
     vTaskDelay(pdMS_TO_TICKS(300));
 
     while (1) {
+        if (!s_gps_enabled) {
+            vTaskDelay(pdMS_TO_TICKS(GPS_TASK_PERIOD_MS));
+            continue;
+        }
         memset(s_read_buf, 0, sizeof(s_read_buf));
         unsigned int len = GpsReadData(s_read_buf);
         if (len > 0) {
@@ -179,5 +185,26 @@ static void app_gps_task(void *arg)
 
 void app_gps_start(void)
 {
-    xTaskCreate(app_gps_task, "app_gps", 10240, NULL, 10, NULL);
+    if (s_gps_task) {
+        return;
+    }
+    s_gps_enabled = true;
+    xTaskCreate(app_gps_task, "app_gps", 10240, NULL, 10, &s_gps_task);
+}
+
+void app_gps_stop(void)
+{
+    s_gps_enabled = false;
+    ESP_LOGW(TAG, "gps stop requested");
+}
+
+void app_gps_resume(void)
+{
+    s_gps_enabled = true;
+    ESP_LOGW(TAG, "gps resume");
+}
+
+bool app_gps_is_running(void)
+{
+    return s_gps_enabled;
 }

@@ -49,6 +49,9 @@ void app_datalog_enqueue_raw(const DatalogRaw_t *raw_data);
 void app_datalog_log_event(const DatalogEvent_t *event);
 void app_datalog_save_summary(const DatalogSummary_t *summary);
 esp_err_t app_datalog_save_summary_batch(const DatalogSummary_t *rows, size_t count);
+void app_datalog_stop(void);
+void app_datalog_resume(void);
+bool app_datalog_is_running(void);
 
 #ifdef __cplusplus
 }

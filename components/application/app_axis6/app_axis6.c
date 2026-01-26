@@ -14,6 +14,8 @@ static int warmup = 5;   // 跳过前5帧（约200ms），按需调，目前测�
 #define AXIS6_IMU_LOG 0  // set to 1 to enable IMU logs
 
 t_sQMI8658 qmi8658_info;
+static TaskHandle_t s_axis6_task = NULL;
+static volatile bool s_axis6_enabled = true;
 
 static void axis6_task(void* arg)
 {
@@ -28,6 +30,10 @@ static void axis6_task(void* arg)
     ESP_LOGW(TAG, "axis6 task started");
 
     while (1) {
+        if (!s_axis6_enabled) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
         // 阻塞读取IMU
         qmi8658_Read_AccAndGry(&qmi8658_info);
 
@@ -67,5 +73,26 @@ static void axis6_task(void* arg)
 
 void app_axis6_start(void)
 {
-    xTaskCreate(axis6_task, "axis6", 8192, NULL, 10, NULL);
+    if (s_axis6_task) {
+        return;
+    }
+    s_axis6_enabled = true;
+    xTaskCreate(axis6_task, "axis6", 8192, NULL, 10, &s_axis6_task);
+}
+
+void app_axis6_stop(void)
+{
+    s_axis6_enabled = false;
+    ESP_LOGW(TAG, "axis6 stop requested");
+}
+
+void app_axis6_resume(void)
+{
+    s_axis6_enabled = true;
+    ESP_LOGW(TAG, "axis6 resume");
+}
+
+bool app_axis6_is_running(void)
+{
+    return s_axis6_enabled;
 }

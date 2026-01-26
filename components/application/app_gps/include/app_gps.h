@@ -1,6 +1,8 @@
 #ifndef APP_GPS_H
 #define APP_GPS_H
 
+#include <stdbool.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -48,6 +50,9 @@ typedef struct {
 } GNSS_Data;
 
 void app_gps_start(void);
+void app_gps_stop(void);
+void app_gps_resume(void);
+bool app_gps_is_running(void);
 
 #ifdef __cplusplus
 }

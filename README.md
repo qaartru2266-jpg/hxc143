@@ -70,4 +70,10 @@ idf.py -p PORT flash
 - `app_state`：IMU/GPS 数据中枢。
 - `app_axis6` / `app_gps`：传感器数据采集。
 
+## 开发者控制开关（可选）
+为了方便单独校准和调试 IMU/GPS/写卡，提供了统一停止/恢复接口，且不依赖 menuconfig 或按键。
+
+你可以在代码里直接调用：
+`app_control_stop_all()` / `app_control_resume_all()` 或单独的 `app_control_stop_imu()`、`app_control_stop_gps()`、`app_control_stop_datalog()`。
+
 如需恢复 Mock 逻辑测试，可在 `main/main_app.c` 中开启 `ENABLE_MOCK_TEST` 并调用 `app_logic_start()`。

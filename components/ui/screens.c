@@ -454,9 +454,128 @@ void tick_screen_menu_page() {
     (void)flowState;
 }
 
+void create_screen_developer_page() {
+    void *flowState = getFlowState(0, 7);
+    (void)flowState;
+    lv_obj_t *obj = lv_obj_create(0);
+    objects.developer_page = obj;
+    lv_obj_set_pos(obj, 0, 0);
+    lv_obj_set_size(obj, 466, 466);
+    {
+        lv_obj_t *parent_obj = obj;
+        {
+            lv_obj_t *obj = lv_button_create(parent_obj);
+            lv_obj_set_pos(obj, 148, 26);
+            lv_obj_set_size(obj, 170, 84);
+            {
+                lv_obj_t *parent_obj = obj;
+                {
+                    lv_obj_t *obj = lv_label_create(parent_obj);
+                    lv_obj_set_pos(obj, 0, 0);
+                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_text_font(obj, &ui_font_alibaba_pu_hui_ti_3_55_regular, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_label_set_text(obj, "IMU 校准");
+                }
+            }
+        }
+        {
+            lv_obj_t *obj = lv_button_create(parent_obj);
+            lv_obj_set_pos(obj, 259, 136);
+            lv_obj_set_size(obj, 170, 84);
+            {
+                lv_obj_t *parent_obj = obj;
+                {
+                    lv_obj_t *obj = lv_label_create(parent_obj);
+                    lv_obj_set_pos(obj, 0, 0);
+                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_label_set_text(obj, "Stationary");
+                }
+            }
+        }
+        {
+            lv_obj_t *obj = lv_button_create(parent_obj);
+            lv_obj_set_pos(obj, 37, 136);
+            lv_obj_set_size(obj, 170, 84);
+            {
+                lv_obj_t *parent_obj = obj;
+                {
+                    lv_obj_t *obj = lv_label_create(parent_obj);
+                    lv_obj_set_pos(obj, 0, 0);
+                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_label_set_text(obj, "walk");
+                }
+            }
+        }
+        {
+            lv_obj_t *obj = lv_button_create(parent_obj);
+            lv_obj_set_pos(obj, 148, 343);
+            lv_obj_set_size(obj, 170, 84);
+            {
+                lv_obj_t *parent_obj = obj;
+                {
+                    // Bus
+                    lv_obj_t *obj = lv_label_create(parent_obj);
+                    objects.bus = obj;
+                    lv_obj_set_pos(obj, 0, 0);
+                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_label_set_text(obj, "Bus");
+                }
+            }
+        }
+        {
+            lv_obj_t *obj = lv_button_create(parent_obj);
+            lv_obj_set_pos(obj, 37, 246);
+            lv_obj_set_size(obj, 170, 84);
+            {
+                lv_obj_t *parent_obj = obj;
+                {
+                    lv_obj_t *obj = lv_label_create(parent_obj);
+                    lv_obj_set_pos(obj, 0, 0);
+                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_label_set_text(obj, "Bike");
+                }
+            }
+        }
+        {
+            lv_obj_t *obj = lv_button_create(parent_obj);
+            lv_obj_set_pos(obj, 259, 246);
+            lv_obj_set_size(obj, 170, 84);
+            {
+                lv_obj_t *parent_obj = obj;
+                {
+                    lv_obj_t *obj = lv_label_create(parent_obj);
+                    lv_obj_set_pos(obj, 0, 0);
+                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_label_set_text(obj, "Car");
+                }
+            }
+        }
+    }
+    
+    tick_screen_developer_page();
+}
 
-static const char *screen_names[] = { "main_page", "control_page", "test_page", "about_page", "calendar_page", "chart_page", "menu_page" };
-static const char *object_names[] = { "main_page", "control_page", "test_page", "about_page", "calendar_page", "chart_page", "menu_page", "test", "back_main", "current_time", "bar_battery", "current_date", "label_battery", "obj0", "obj1" };
+void delete_screen_developer_page() {
+    lv_obj_delete(objects.developer_page);
+    objects.developer_page = 0;
+    objects.bus = 0;
+    deletePageFlowState(7);
+}
+
+void tick_screen_developer_page() {
+    void *flowState = getFlowState(0, 7);
+    (void)flowState;
+}
+
+
+static const char *screen_names[] = { "main_page", "control_page", "test_page", "about_page", "calendar_page", "chart_page", "menu_page", "developer_page" };
+static const char *object_names[] = { "main_page", "control_page", "test_page", "about_page", "calendar_page", "chart_page", "menu_page", "developer_page", "test", "back_main", "current_time", "bar_battery", "current_date", "label_battery", "obj0", "obj1", "bus" };
 
 
 typedef void (*create_screen_func_t)();
@@ -468,6 +587,7 @@ create_screen_func_t create_screen_funcs[] = {
     create_screen_calendar_page,
     create_screen_chart_page,
     create_screen_menu_page,
+    create_screen_developer_page,
 };
 void create_screen(int screen_index) {
     create_screen_funcs[screen_index]();
@@ -485,6 +605,7 @@ delete_screen_func_t delete_screen_funcs[] = {
     delete_screen_calendar_page,
     delete_screen_chart_page,
     delete_screen_menu_page,
+    delete_screen_developer_page,
 };
 void delete_screen(int screen_index) {
     delete_screen_funcs[screen_index]();
@@ -502,6 +623,7 @@ tick_screen_func_t tick_screen_funcs[] = {
     tick_screen_calendar_page,
     tick_screen_chart_page,
     tick_screen_menu_page,
+    tick_screen_developer_page,
 };
 void tick_screen(int screen_index) {
     tick_screen_funcs[screen_index]();
@@ -523,4 +645,5 @@ void create_screens() {
     
     create_screen_main_page();
     create_screen_menu_page();
+    create_screen_developer_page();
 }

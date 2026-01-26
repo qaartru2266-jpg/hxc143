@@ -15,6 +15,7 @@ typedef struct _objects_t {
     lv_obj_t *calendar_page;
     lv_obj_t *chart_page;
     lv_obj_t *menu_page;
+    lv_obj_t *developer_page;
     lv_obj_t *test;
     lv_obj_t *back_main;
     lv_obj_t *current_time;
@@ -23,6 +24,7 @@ typedef struct _objects_t {
     lv_obj_t *label_battery;
     lv_obj_t *obj0;
     lv_obj_t *obj1;
+    lv_obj_t *bus;
 } objects_t;
 
 extern objects_t objects;
@@ -35,6 +37,7 @@ enum ScreensEnum {
     SCREEN_ID_CALENDAR_PAGE = 5,
     SCREEN_ID_CHART_PAGE = 6,
     SCREEN_ID_MENU_PAGE = 7,
+    SCREEN_ID_DEVELOPER_PAGE = 8,
 };
 
 void create_screen_main_page();
@@ -64,6 +67,10 @@ void tick_screen_chart_page();
 void create_screen_menu_page();
 void delete_screen_menu_page();
 void tick_screen_menu_page();
+
+void create_screen_developer_page();
+void delete_screen_developer_page();
+void tick_screen_developer_page();
 
 void create_screen_by_id(enum ScreensEnum screenId);
 void delete_screen_by_id(enum ScreensEnum screenId);

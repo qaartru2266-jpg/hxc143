@@ -62,6 +62,8 @@ static QueueHandle_t s_raw_queue = NULL;
 static TaskHandle_t s_logger_task = NULL;
 static TaskHandle_t s_sampler_task = NULL;
 static SemaphoreHandle_t s_mount_lock = NULL;
+static volatile bool s_datalog_enabled = true;
+static volatile bool s_datalog_stop_requested = false;
 
 static FILE *s_raw_file = NULL;
 static char s_raw_file_buf[FILE_BUF_SIZE];
@@ -425,6 +427,17 @@ static void datalog_raw_flush(bool force_sync)
     s_raw_lines_since_flush = 0;
 }
 
+static void datalog_close_raw_file(void)
+{
+    if (!s_raw_file) {
+        return;
+    }
+    fflush(s_raw_file);
+    (void)fsync(fileno(s_raw_file));
+    fclose(s_raw_file);
+    s_raw_file = NULL;
+}
+
 static void datalog_write_raw(const DatalogRaw_t *raw)
 {
     char dir[DIR_BUF_SIZE];
@@ -515,6 +528,18 @@ static void datalog_logger_task(void *arg)
             continue;
         }
 
+        if (!s_datalog_enabled) {
+            datalog_close_raw_file();
+            if (s_datalog_stop_requested) {
+                ESP_LOGW(TAG, "datalog stopped");
+                s_datalog_stop_requested = false;
+            }
+            while (xQueueReceive(s_raw_queue, &raw, 0) == pdTRUE) {
+                s_raw_dropped++;
+            }
+            continue;
+        }
+
         do {
             if (!datalog_ensure_mounted()) {
                 s_raw_dropped++;
@@ -537,6 +562,10 @@ static void datalog_sampler_task(void *arg)
     (void)arg;
     TickType_t last_wake = xTaskGetTickCount();
     while (1) {
+        if (!s_datalog_enabled) {
+            vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(SAMPLER_INTERVAL_MS));
+            continue;
+        }
         DatalogRaw_t raw;
         if (datalog_build_raw_sample(&raw)) {
             app_datalog_enqueue_raw(&raw);
@@ -553,6 +582,7 @@ esp_err_t app_datalog_start(void)
         return ESP_OK;
     }
 
+    s_datalog_enabled = true;
     s_raw_queue = xQueueCreate(LOGGER_QUEUE_LENGTH, sizeof(DatalogRaw_t));
     if (!s_raw_queue) {
         ESP_LOGE(TAG, "raw queue create failed");
@@ -577,9 +607,30 @@ esp_err_t app_datalog_start(void)
     return ESP_OK;
 }
 
+void app_datalog_stop(void)
+{
+    s_datalog_enabled = false;
+    s_datalog_stop_requested = true;
+    if (s_raw_queue) {
+        DatalogRaw_t dummy = {0};
+        (void)xQueueSend(s_raw_queue, &dummy, 0);
+    }
+}
+
+void app_datalog_resume(void)
+{
+    s_datalog_enabled = true;
+    ESP_LOGW(TAG, "datalog resume");
+}
+
+bool app_datalog_is_running(void)
+{
+    return s_datalog_enabled;
+}
+
 void app_datalog_enqueue_raw(const DatalogRaw_t *raw_data)
 {
-    if (!raw_data || !s_raw_queue) {
+    if (!raw_data || !s_raw_queue || !s_datalog_enabled) {
         return;
     }
     if (xQueueSend(s_raw_queue, raw_data, 0) != pdTRUE) {
