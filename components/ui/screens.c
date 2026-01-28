@@ -57,6 +57,83 @@ static void event_handler_cb_about_page_back_main(lv_event_t *e) {
     }
 }
 
+static void event_handler_cb_developer_page_developer_page(lv_event_t *e) {
+    lv_event_code_t event = lv_event_get_code(e);
+    void *flowState = lv_event_get_user_data(e);
+    (void)flowState;
+    
+    if (event == LV_EVENT_GESTURE) {
+        e->user_data = (void *)0;
+        flowPropagateValueLVGLEvent(flowState, 1, 0, e);
+    }
+}
+
+static void event_handler_cb_developer_page_walk_data_get(lv_event_t *e) {
+    lv_event_code_t event = lv_event_get_code(e);
+    void *flowState = lv_event_get_user_data(e);
+    (void)flowState;
+    
+    if (event == LV_EVENT_VALUE_CHANGED) {
+        e->user_data = (void *)0;
+        action_on_walk_data_get(e);
+    }
+}
+
+static void event_handler_cb_developer_page_stationary_data_get(lv_event_t *e) {
+    lv_event_code_t event = lv_event_get_code(e);
+    void *flowState = lv_event_get_user_data(e);
+    (void)flowState;
+    
+    if (event == LV_EVENT_VALUE_CHANGED) {
+        e->user_data = (void *)0;
+        action_on_stationary_data_get(e);
+    }
+}
+
+static void event_handler_cb_developer_page_obj0(lv_event_t *e) {
+    lv_event_code_t event = lv_event_get_code(e);
+    void *flowState = lv_event_get_user_data(e);
+    (void)flowState;
+    
+    if (event == LV_EVENT_VALUE_CHANGED) {
+        e->user_data = (void *)0;
+        action_on_bike_data_get(e);
+    }
+}
+
+static void event_handler_cb_developer_page_obj1(lv_event_t *e) {
+    lv_event_code_t event = lv_event_get_code(e);
+    void *flowState = lv_event_get_user_data(e);
+    (void)flowState;
+    
+    if (event == LV_EVENT_VALUE_CHANGED) {
+        e->user_data = (void *)0;
+        action_on_car_data_get(e);
+    }
+}
+
+static void event_handler_cb_developer_page_obj2(lv_event_t *e) {
+    lv_event_code_t event = lv_event_get_code(e);
+    void *flowState = lv_event_get_user_data(e);
+    (void)flowState;
+    
+    if (event == LV_EVENT_VALUE_CHANGED) {
+        e->user_data = (void *)0;
+        action_on_bus_data_get(e);
+    }
+}
+
+static void event_handler_cb_developer_page_obj3(lv_event_t *e) {
+    lv_event_code_t event = lv_event_get_code(e);
+    void *flowState = lv_event_get_user_data(e);
+    (void)flowState;
+    
+    if (event == LV_EVENT_VALUE_CHANGED) {
+        e->user_data = (void *)0;
+        action_on_subway_data_get(e);
+    }
+}
+
 void create_screen_main_page() {
     void *flowState = getFlowState(0, 0);
     (void)flowState;
@@ -316,7 +393,7 @@ void create_screen_about_page() {
         lv_obj_t *parent_obj = obj;
         {
             lv_obj_t *obj = lv_qrcode_create(parent_obj);
-            objects.obj0 = obj;
+            objects.obj4 = obj;
             lv_obj_set_pos(obj, 153, 153);
             lv_obj_set_size(obj, 160, 160);
             lv_qrcode_set_size(obj, 160);
@@ -351,7 +428,7 @@ void create_screen_about_page() {
 void delete_screen_about_page() {
     lv_obj_delete(objects.about_page);
     objects.about_page = 0;
-    objects.obj0 = 0;
+    objects.obj4 = 0;
     objects.back_main = 0;
     deletePageFlowState(3);
 }
@@ -373,7 +450,7 @@ void create_screen_calendar_page() {
         lv_obj_t *parent_obj = obj;
         {
             lv_obj_t *obj = lv_calendar_create(parent_obj);
-            objects.obj1 = obj;
+            objects.obj5 = obj;
             lv_obj_set_pos(obj, 58, 66);
             lv_obj_set_size(obj, 350, 350);
             lv_calendar_header_arrow_create(obj);
@@ -391,7 +468,7 @@ void create_screen_calendar_page() {
 void delete_screen_calendar_page() {
     lv_obj_delete(objects.calendar_page);
     objects.calendar_page = 0;
-    objects.obj1 = 0;
+    objects.obj5 = 0;
     deletePageFlowState(4);
 }
 
@@ -461,100 +538,88 @@ void create_screen_developer_page() {
     objects.developer_page = obj;
     lv_obj_set_pos(obj, 0, 0);
     lv_obj_set_size(obj, 466, 466);
+    lv_obj_add_event_cb(obj, event_handler_cb_developer_page_developer_page, LV_EVENT_ALL, flowState);
     {
         lv_obj_t *parent_obj = obj;
         {
-            lv_obj_t *obj = lv_button_create(parent_obj);
-            lv_obj_set_pos(obj, 148, 26);
-            lv_obj_set_size(obj, 170, 84);
-            {
-                lv_obj_t *parent_obj = obj;
-                {
-                    lv_obj_t *obj = lv_label_create(parent_obj);
-                    lv_obj_set_pos(obj, 0, 0);
-                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_text_font(obj, &ui_font_alibaba_pu_hui_ti_3_55_regular, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_label_set_text(obj, "IMU 校准");
-                }
-            }
+            // walk_data_get
+            lv_obj_t *obj = lv_switch_create(parent_obj);
+            objects.walk_data_get = obj;
+            lv_obj_set_pos(obj, 186, 30);
+            lv_obj_set_size(obj, 130, 65);
+            lv_obj_add_event_cb(obj, event_handler_cb_developer_page_walk_data_get, LV_EVENT_ALL, flowState);
         }
         {
-            lv_obj_t *obj = lv_button_create(parent_obj);
-            lv_obj_set_pos(obj, 259, 136);
-            lv_obj_set_size(obj, 170, 84);
-            {
-                lv_obj_t *parent_obj = obj;
-                {
-                    lv_obj_t *obj = lv_label_create(parent_obj);
-                    lv_obj_set_pos(obj, 0, 0);
-                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_label_set_text(obj, "Stationary");
-                }
-            }
+            lv_obj_t *obj = lv_label_create(parent_obj);
+            lv_obj_set_pos(obj, 148, 46);
+            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_label_set_text(obj, "walk");
         }
         {
-            lv_obj_t *obj = lv_button_create(parent_obj);
-            lv_obj_set_pos(obj, 37, 136);
-            lv_obj_set_size(obj, 170, 84);
-            {
-                lv_obj_t *parent_obj = obj;
-                {
-                    lv_obj_t *obj = lv_label_create(parent_obj);
-                    lv_obj_set_pos(obj, 0, 0);
-                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_label_set_text(obj, "walk");
-                }
-            }
+            lv_obj_t *obj = lv_label_create(parent_obj);
+            lv_obj_set_pos(obj, 171, 138);
+            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_label_set_text(obj, "stationary");
         }
         {
-            lv_obj_t *obj = lv_button_create(parent_obj);
-            lv_obj_set_pos(obj, 148, 343);
-            lv_obj_set_size(obj, 170, 84);
-            {
-                lv_obj_t *parent_obj = obj;
-                {
-                    // Bus
-                    lv_obj_t *obj = lv_label_create(parent_obj);
-                    objects.bus = obj;
-                    lv_obj_set_pos(obj, 0, 0);
-                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_label_set_text(obj, "Bus");
-                }
-            }
+            // stationary_data_get
+            lv_obj_t *obj = lv_switch_create(parent_obj);
+            objects.stationary_data_get = obj;
+            lv_obj_set_pos(obj, 61, 154);
+            lv_obj_set_size(obj, 130, 65);
+            lv_obj_add_event_cb(obj, event_handler_cb_developer_page_stationary_data_get, LV_EVENT_ALL, flowState);
         }
         {
-            lv_obj_t *obj = lv_button_create(parent_obj);
-            lv_obj_set_pos(obj, 37, 246);
-            lv_obj_set_size(obj, 170, 84);
-            {
-                lv_obj_t *parent_obj = obj;
-                {
-                    lv_obj_t *obj = lv_label_create(parent_obj);
-                    lv_obj_set_pos(obj, 0, 0);
-                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_label_set_text(obj, "Bike");
-                }
-            }
+            lv_obj_t *obj = lv_label_create(parent_obj);
+            lv_obj_set_pos(obj, 260, 203);
+            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_label_set_text(obj, "bike");
         }
         {
-            lv_obj_t *obj = lv_button_create(parent_obj);
-            lv_obj_set_pos(obj, 259, 246);
-            lv_obj_set_size(obj, 170, 84);
-            {
-                lv_obj_t *parent_obj = obj;
-                {
-                    lv_obj_t *obj = lv_label_create(parent_obj);
-                    lv_obj_set_pos(obj, 0, 0);
-                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_label_set_text(obj, "Car");
-                }
-            }
+            lv_obj_t *obj = lv_switch_create(parent_obj);
+            objects.obj0 = obj;
+            lv_obj_set_pos(obj, 290, 154);
+            lv_obj_set_size(obj, 130, 65);
+            lv_obj_add_event_cb(obj, event_handler_cb_developer_page_obj0, LV_EVENT_ALL, flowState);
+        }
+        {
+            lv_obj_t *obj = lv_label_create(parent_obj);
+            lv_obj_set_pos(obj, 184, 257);
+            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_label_set_text(obj, "car");
+        }
+        {
+            lv_obj_t *obj = lv_switch_create(parent_obj);
+            objects.obj1 = obj;
+            lv_obj_set_pos(obj, 61, 263);
+            lv_obj_set_size(obj, 130, 65);
+            lv_obj_add_event_cb(obj, event_handler_cb_developer_page_obj1, LV_EVENT_ALL, flowState);
+        }
+        {
+            lv_obj_t *obj = lv_switch_create(parent_obj);
+            objects.obj2 = obj;
+            lv_obj_set_pos(obj, 148, 367);
+            lv_obj_set_size(obj, 130, 65);
+            lv_obj_add_event_cb(obj, event_handler_cb_developer_page_obj2, LV_EVENT_ALL, flowState);
+        }
+        {
+            lv_obj_t *obj = lv_label_create(parent_obj);
+            lv_obj_set_pos(obj, 276, 389);
+            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_label_set_text(obj, "bus");
+        }
+        {
+            lv_obj_t *obj = lv_label_create(parent_obj);
+            lv_obj_set_pos(obj, 230, 296);
+            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_label_set_text(obj, "subway");
+        }
+        {
+            lv_obj_t *obj = lv_switch_create(parent_obj);
+            objects.obj3 = obj;
+            lv_obj_set_pos(obj, 284, 265);
+            lv_obj_set_size(obj, 130, 65);
+            lv_obj_add_event_cb(obj, event_handler_cb_developer_page_obj3, LV_EVENT_ALL, flowState);
         }
     }
     
@@ -564,7 +629,12 @@ void create_screen_developer_page() {
 void delete_screen_developer_page() {
     lv_obj_delete(objects.developer_page);
     objects.developer_page = 0;
-    objects.bus = 0;
+    objects.walk_data_get = 0;
+    objects.stationary_data_get = 0;
+    objects.obj0 = 0;
+    objects.obj1 = 0;
+    objects.obj2 = 0;
+    objects.obj3 = 0;
     deletePageFlowState(7);
 }
 
@@ -575,7 +645,7 @@ void tick_screen_developer_page() {
 
 
 static const char *screen_names[] = { "main_page", "control_page", "test_page", "about_page", "calendar_page", "chart_page", "menu_page", "developer_page" };
-static const char *object_names[] = { "main_page", "control_page", "test_page", "about_page", "calendar_page", "chart_page", "menu_page", "developer_page", "test", "back_main", "current_time", "bar_battery", "current_date", "label_battery", "obj0", "obj1", "bus" };
+static const char *object_names[] = { "main_page", "control_page", "test_page", "about_page", "calendar_page", "chart_page", "menu_page", "developer_page", "test", "back_main", "walk_data_get", "stationary_data_get", "obj0", "obj1", "obj2", "obj3", "current_time", "bar_battery", "current_date", "label_battery", "obj4", "obj5" };
 
 
 typedef void (*create_screen_func_t)();

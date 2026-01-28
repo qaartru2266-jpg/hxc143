@@ -1,0 +1,2 @@
+datetime_local,uptime_ms,acc_x,acc_y,acc_z,gyro_x,gyro_y,gyro_z,speed_mps,turn_rate_deg_s,gps_valid
+2026-01-28 13:31:16,240,1778.000,-2875.000,7550.000,34.000,-229.000,142.000,NA,0.000,0

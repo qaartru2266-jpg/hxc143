@@ -1,6 +1,7 @@
 #ifndef APP_SDCARD_H
 #define APP_SDCARD_H
 
+#include "freertos/FreeRTOS.h"
 #include "sdkconfig.h"
 
 #if CONFIG_JOFTMODE_ENABLE_ML
@@ -13,6 +14,8 @@ extern "C" {
 
 void app_sdcard_start(void);
 bool app_sdcard_is_ready(void);
+bool app_sdcard_lock_fs(TickType_t timeout_ticks);
+void app_sdcard_unlock_fs(void);
 #if CONFIG_JOFTMODE_ENABLE_ML
 bool app_ml_get_latest(ml_result_t *out);
 #endif

@@ -31,7 +31,7 @@
 #endif
 
 #define WIFI_SCAN_INTERVAL_MS 30000
-#define WIFI_SSID "meizu"
+#define WIFI_SSID "rxwhyjz01"
 #define WIFI_PASS "123456785"
 #define SNTP_SERVER "ntp.aliyun.com"
 #define BLE_DEVICE_NAME "shanruishanrui"

@@ -7,6 +7,12 @@
 extern "C" {
 #endif
 
+extern void action_on_walk_data_get(lv_event_t * e);
+extern void action_on_stationary_data_get(lv_event_t * e);
+extern void action_on_bike_data_get(lv_event_t * e);
+extern void action_on_bus_data_get(lv_event_t * e);
+extern void action_on_car_data_get(lv_event_t * e);
+extern void action_on_subway_data_get(lv_event_t * e);
 
 
 #ifdef __cplusplus

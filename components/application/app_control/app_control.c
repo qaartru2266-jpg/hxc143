@@ -1,5 +1,7 @@
 #include "app_control.h"
 
+#include <stdarg.h>
+
 #include "esp_log.h"
 #include "app_axis6.h"
 #include "app_datalog.h"
@@ -7,6 +9,15 @@
 
 #define TAG "app_control"
 static bool s_all_stopped = false;
+static bool s_quiet_mode = false;
+static vprintf_like_t s_log_vprintf = NULL;
+
+static int app_control_quiet_vprintf(const char *fmt, va_list ap)
+{
+    (void)fmt;
+    (void)ap;
+    return 0;
+}
 
 void app_control_stop_all(void)
 {
@@ -59,4 +70,29 @@ void app_control_resume_datalog(void)
 bool app_control_is_stopped(void)
 {
     return s_all_stopped;
+}
+
+void app_control_set_quiet(bool enable)
+{
+    if (s_quiet_mode == enable) {
+        return;
+    }
+    s_quiet_mode = enable;
+    if (enable) {
+        if (!s_log_vprintf) {
+            s_log_vprintf = esp_log_set_vprintf(app_control_quiet_vprintf);
+        }
+        esp_log_level_set("*", ESP_LOG_NONE);
+    } else {
+        esp_log_level_set("*", ESP_LOG_INFO);
+        if (s_log_vprintf) {
+            esp_log_set_vprintf(s_log_vprintf);
+            s_log_vprintf = NULL;
+        }
+    }
+}
+
+bool app_control_is_quiet(void)
+{
+    return s_quiet_mode;
 }

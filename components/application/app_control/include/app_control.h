@@ -17,6 +17,8 @@ void app_control_resume_gps(void);
 void app_control_stop_datalog(void);
 void app_control_resume_datalog(void);
 bool app_control_is_stopped(void);
+void app_control_set_quiet(bool enable);
+bool app_control_is_quiet(void);
 
 #ifdef __cplusplus
 }

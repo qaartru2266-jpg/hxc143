@@ -7,6 +7,8 @@
 #include "axis6_interface.h"
 #include "app_axis6.h"
 #include "app_state.h"
+#include "app_imu_calib.h"
+#include "app_control.h"
 #include "esp_timer.h"
 
 static const char* TAG = "axis6";
@@ -37,16 +39,25 @@ static void axis6_task(void* arg)
         // 阻塞读取IMU
         qmi8658_Read_AccAndGry(&qmi8658_info);
 
+        int16_t acc_x = qmi8658_info.acc_x;
+        int16_t acc_y = qmi8658_info.acc_y;
+        int16_t acc_z = qmi8658_info.acc_z;
+        int16_t gyr_x = qmi8658_info.gyr_x;
+        int16_t gyr_y = qmi8658_info.gyr_y;
+        int16_t gyr_z = qmi8658_info.gyr_z;
+
+        app_imu_calib_apply(&acc_x, &acc_y, &acc_z, &gyr_x, &gyr_y, &gyr_z);
+
         if (warmup > 0) {
             warmup--;
         } else {
             app_state_imu_sample_t sample = {
-                .acc_x = qmi8658_info.acc_x,
-                .acc_y = qmi8658_info.acc_y,
-                .acc_z = qmi8658_info.acc_z,
-                .gyr_x = qmi8658_info.gyr_x,
-                .gyr_y = qmi8658_info.gyr_y,
-                .gyr_z = qmi8658_info.gyr_z,
+                .acc_x = acc_x,
+                .acc_y = acc_y,
+                .acc_z = acc_z,
+                .gyr_x = gyr_x,
+                .gyr_y = gyr_y,
+                .gyr_z = gyr_z,
                 .timestamp_us = esp_timer_get_time()
             };
             app_state_set_imu_sample(&sample);
@@ -54,16 +65,18 @@ static void axis6_task(void* arg)
 
 #if AXIS6_IMU_LOG
         ESP_LOGI(TAG, "imu acc=(%d,%d,%d) gyr=(%d,%d,%d)",
-            qmi8658_info.acc_x, qmi8658_info.acc_y, qmi8658_info.acc_z,
-            qmi8658_info.gyr_x, qmi8658_info.gyr_y, qmi8658_info.gyr_z);
+            acc_x, acc_y, acc_z,
+            gyr_x, gyr_y, gyr_z);
 #else
-        if (++hb >= 200) {
+        if (++hb >= 400) {
             hb = 0;
             UBaseType_t free_words = uxTaskGetStackHighWaterMark(NULL);
-            ESP_LOGW(TAG, "tick acc=(%d,%d,%d) gyr=(%d,%d,%d) stack_free=%u words",
-                qmi8658_info.acc_x, qmi8658_info.acc_y, qmi8658_info.acc_z,
-                qmi8658_info.gyr_x, qmi8658_info.gyr_y, qmi8658_info.gyr_z,
-                (unsigned)free_words);
+            if (!app_control_is_quiet()) {
+                ESP_LOGW(TAG, "tick acc=(%d,%d,%d) gyr=(%d,%d,%d) stack_free=%u words",
+                    acc_x, acc_y, acc_z,
+                    gyr_x, gyr_y, gyr_z,
+                    (unsigned)free_words);
+            }
         }
 #endif
 

@@ -18,13 +18,18 @@ typedef struct _objects_t {
     lv_obj_t *developer_page;
     lv_obj_t *test;
     lv_obj_t *back_main;
+    lv_obj_t *walk_data_get;
+    lv_obj_t *stationary_data_get;
+    lv_obj_t *obj0;
+    lv_obj_t *obj1;
+    lv_obj_t *obj2;
+    lv_obj_t *obj3;
     lv_obj_t *current_time;
     lv_obj_t *bar_battery;
     lv_obj_t *current_date;
     lv_obj_t *label_battery;
-    lv_obj_t *obj0;
-    lv_obj_t *obj1;
-    lv_obj_t *bus;
+    lv_obj_t *obj4;
+    lv_obj_t *obj5;
 } objects_t;
 
 extern objects_t objects;

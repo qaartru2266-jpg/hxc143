@@ -1,5 +1,6 @@
 #include "app_datalog.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <inttypes.h>
 #include <math.h>
@@ -19,11 +20,14 @@
 #include "esp_vfs_fat.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "sdmmc_cmd.h"
+#include "sdkconfig.h"
 
 #include "app_state.h"
 #include "app_time.h"
+#include "app_sdcard.h"
 
 #define TAG "app_datalog"
 
@@ -62,8 +66,10 @@ static QueueHandle_t s_raw_queue = NULL;
 static TaskHandle_t s_logger_task = NULL;
 static TaskHandle_t s_sampler_task = NULL;
 static SemaphoreHandle_t s_mount_lock = NULL;
+static SemaphoreHandle_t s_session_lock = NULL;
 static volatile bool s_datalog_enabled = true;
 static volatile bool s_datalog_stop_requested = false;
+static volatile bool s_default_raw_enabled = true;
 
 static FILE *s_raw_file = NULL;
 static char s_raw_file_buf[FILE_BUF_SIZE];
@@ -72,6 +78,10 @@ static char s_raw_name[FILE_NAME_SIZE];
 static uint32_t s_raw_lines_since_flush = 0;
 static uint32_t s_raw_flushes_since_sync = 0;
 static volatile uint32_t s_raw_dropped = 0;
+static bool s_session_active = false;
+static char s_session_dir[DIR_BUF_SIZE];
+static char s_session_file[FILE_NAME_SIZE];
+static char s_session_label[APP_DATALOG_MODE_MAX_LEN];
 
 static int64_t s_last_imu_ts = -1;
 static bool s_have_gps_cache = false;
@@ -98,6 +108,10 @@ static esp_vfs_fat_sdmmc_mount_config_t s_mountcfg = {
     .allocation_unit_size = 0
 };
 
+static void datalog_close_raw_file(void);
+static bool datalog_ensure_dir(const char *dir);
+static esp_err_t datalog_mount(void);
+
 static void datalog_lock(void)
 {
     if (!s_mount_lock) {
@@ -113,6 +127,64 @@ static void datalog_unlock(void)
     if (s_mount_lock) {
         xSemaphoreGive(s_mount_lock);
     }
+}
+
+static void datalog_session_lock(void)
+{
+    if (!s_session_lock) {
+        s_session_lock = xSemaphoreCreateMutex();
+    }
+    if (s_session_lock) {
+        xSemaphoreTake(s_session_lock, portMAX_DELAY);
+    }
+}
+
+static void datalog_session_unlock(void)
+{
+    if (s_session_lock) {
+        xSemaphoreGive(s_session_lock);
+    }
+}
+
+static bool datalog_session_is_active(void)
+{
+    bool active = false;
+    datalog_session_lock();
+    active = s_session_active;
+    datalog_session_unlock();
+    return active;
+}
+
+static bool datalog_remount_locked(void)
+{
+    if (s_raw_file) {
+        datalog_close_raw_file();
+    }
+
+    if (s_mounted && s_card) {
+        esp_vfs_fat_sdcard_unmount(MOUNT_POINT, s_card);
+    }
+    s_mounted = false;
+    s_card = NULL;
+
+    esp_err_t err = datalog_mount();
+    return (err == ESP_OK || err == ESP_ERR_INVALID_STATE);
+}
+
+static bool datalog_ensure_dir_with_remount(const char *dir)
+{
+    if (datalog_ensure_dir(dir)) {
+        return true;
+    }
+    if (errno != EIO) {
+        return false;
+    }
+
+    ESP_LOGW(TAG, "sd io error, remounting");
+    if (!datalog_remount_locked()) {
+        return false;
+    }
+    return datalog_ensure_dir(dir);
 }
 
 static bool datalog_get_epoch_ms(int64_t *out_ms)
@@ -182,10 +254,112 @@ static void datalog_copy_token(char *dst, size_t dst_sz, const char *src)
     dst[dst_sz - 1] = '\0';
 }
 
+static bool datalog_format_session_label(const char *label, char *out, size_t out_sz)
+{
+    if (!label || !out || out_sz == 0) {
+        return false;
+    }
+
+    size_t max_len = out_sz - 1;
+#if CONFIG_FATFS_LFN_NONE
+    if (max_len > 8) {
+        max_len = 8;
+    }
+#endif
+
+    size_t out_len = 0;
+    for (size_t i = 0; label[i] != '\0' && out_len < max_len; ++i) {
+        unsigned char ch = (unsigned char)label[i];
+        if (isalnum(ch)) {
+            out[out_len++] = (char)tolower(ch);
+        } else if (ch == '_' || ch == '-') {
+            out[out_len++] = '_';
+        }
+    }
+
+    out[out_len] = '\0';
+    return (out_len > 0);
+}
+
+static bool datalog_format_session_filename(const char *label, uint32_t index, char *out, size_t out_sz)
+{
+    if (!label || !out || out_sz == 0) {
+        return false;
+    }
+
+#if CONFIG_FATFS_LFN_NONE
+    unsigned int width = 2;
+    if (index >= 1000) {
+        width = 4;
+    } else if (index >= 100) {
+        width = 3;
+    }
+
+    size_t label_len = strlen(label);
+    if (label_len > 3) {
+        label_len = 3;
+    }
+    if (label_len == 0) {
+        return false;
+    }
+
+    int len = snprintf(out, out_sz, "%.*s_%0*u.csv", (int)label_len, label, width, (unsigned int)index);
+    return (len > 0 && len < (int)out_sz);
+#else
+    int len = snprintf(out, out_sz, "%s_%02" PRIu32 ".csv", label, index);
+    return (len > 0 && len < (int)out_sz);
+#endif
+}
+
+static uint32_t datalog_find_next_session_index(const char *dir, const char *label)
+{
+    if (!dir || !label || label[0] == '\0') {
+        return 1;
+    }
+
+    char path[PATH_BUF_SIZE];
+    char file[FILE_NAME_SIZE];
+    for (uint32_t i = 1; i <= 9999; ++i) {
+        if (!datalog_format_session_filename(label, i, file, sizeof(file))) {
+            return UINT32_MAX;
+        }
+        int len = snprintf(path, sizeof(path), "%s/%s", dir, file);
+        if (len < 0 || len >= (int)sizeof(path)) {
+            return UINT32_MAX;
+        }
+        struct stat st;
+        if (stat(path, &st) != 0) {
+            if (errno == ENOENT) {
+                return i;
+            }
+        }
+    }
+
+    return UINT32_MAX;
+}
+
 static bool datalog_build_raw_paths(const DatalogRaw_t *raw,
                                     char *dir, size_t dir_sz,
                                     char *file, size_t file_sz)
 {
+    bool use_session = false;
+    char session_dir[DIR_BUF_SIZE];
+    char session_file[FILE_NAME_SIZE];
+
+    datalog_session_lock();
+    if (s_session_active) {
+        use_session = true;
+        datalog_copy_token(session_dir, sizeof(session_dir), s_session_dir);
+        datalog_copy_token(session_file, sizeof(session_file), s_session_file);
+    }
+    datalog_session_unlock();
+
+    if (use_session) {
+        datalog_copy_token(dir, dir_sz, session_dir);
+        datalog_copy_token(file, file_sz, session_file);
+        return true;
+    }
+
     if (raw && raw->datetime_local_ms > 0) {
         time_t sec = (time_t)(raw->datetime_local_ms / 1000);
         struct tm tm_info;
@@ -309,7 +483,7 @@ static bool datalog_ensure_mounted(void)
 
 static bool datalog_open_raw_file(const char *dir, const char *file)
 {
-    if (!datalog_ensure_dir(dir)) {
+    if (!datalog_ensure_dir_with_remount(dir)) {
         return false;
     }
 
@@ -323,6 +497,12 @@ static bool datalog_open_raw_file(const char *dir, const char *file)
     }
 
     FILE *f = fopen(path, "a");
+    if (!f && errno == EIO) {
+        ESP_LOGW(TAG, "fopen io error, remounting");
+        if (datalog_remount_locked()) {
+            f = fopen(path, "a");
+        }
+    }
     if (!f) {
         ESP_LOGE(TAG, "fopen failed: %s errno=%d (%s)", path, errno, strerror(errno));
         return false;
@@ -440,6 +620,10 @@ static void datalog_close_raw_file(void)
 
 static void datalog_write_raw(const DatalogRaw_t *raw)
 {
+    if (!datalog_session_is_active() && !s_default_raw_enabled) {
+        return;
+    }
+
     char dir[DIR_BUF_SIZE];
     char file[FILE_NAME_SIZE];
     (void)datalog_build_raw_paths(raw, dir, sizeof(dir), file, sizeof(file));
@@ -529,7 +713,10 @@ static void datalog_logger_task(void *arg)
         }
 
         if (!s_datalog_enabled) {
-            datalog_close_raw_file();
+            if (app_sdcard_lock_fs(pdMS_TO_TICKS(1000))) {
+                datalog_close_raw_file();
+                app_sdcard_unlock_fs();
+            }
             if (s_datalog_stop_requested) {
                 ESP_LOGW(TAG, "datalog stopped");
                 s_datalog_stop_requested = false;
@@ -549,11 +736,19 @@ static void datalog_logger_task(void *arg)
                     last_mount_log_us = now_us;
                 }
             } else {
-                datalog_write_raw(&raw);
+                if (app_sdcard_lock_fs(portMAX_DELAY)) {
+                    datalog_write_raw(&raw);
+                    app_sdcard_unlock_fs();
+                } else {
+                    s_raw_dropped++;
+                }
             }
         } while (xQueueReceive(s_raw_queue, &raw, pdMS_TO_TICKS(LOGGER_IDLE_WAIT_MS)) == pdTRUE);
 
-        datalog_raw_flush(true);
+        if (app_sdcard_lock_fs(portMAX_DELAY)) {
+            datalog_raw_flush(true);
+            app_sdcard_unlock_fs();
+        }
     }
 }
 
@@ -607,6 +802,100 @@ esp_err_t app_datalog_start(void)
     return ESP_OK;
 }
 
+esp_err_t app_datalog_start_session(const char *label)
+{
+    if (!label || label[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+    char fs_label[APP_DATALOG_MODE_MAX_LEN];
+    if (!datalog_format_session_label(label, fs_label, sizeof(fs_label))) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    datalog_session_lock();
+    bool already_active = s_session_active &&
+        (strncmp(s_session_label, fs_label, sizeof(s_session_label)) == 0);
+    datalog_session_unlock();
+    if (already_active) {
+        return ESP_OK;
+    }
+
+    if (!app_sdcard_lock_fs(pdMS_TO_TICKS(2000))) {
+        ESP_LOGW(TAG, "session start skipped: sd fs busy");
+        return ESP_ERR_TIMEOUT;
+    }
+    if (!datalog_ensure_mounted()) {
+        ESP_LOGW(TAG, "session start skipped: SD not mounted");
+        app_sdcard_unlock_fs();
+        return ESP_FAIL;
+    }
+
+    if (strcmp(label, fs_label) != 0) {
+        ESP_LOGW(TAG, "session label sanitized: %s -> %s", label, fs_label);
+    }
+
+    char dir[DIR_BUF_SIZE];
+    int dir_len = snprintf(dir, sizeof(dir), MOUNT_POINT "/%s", fs_label);
+    if (dir_len < 0 || dir_len >= (int)sizeof(dir)) {
+        app_sdcard_unlock_fs();
+        return ESP_ERR_INVALID_SIZE;
+    }
+    if (!datalog_ensure_dir_with_remount(dir)) {
+        app_sdcard_unlock_fs();
+        return ESP_FAIL;
+    }
+
+    uint32_t next_index = datalog_find_next_session_index(dir, fs_label);
+    if (next_index == UINT32_MAX) {
+        app_sdcard_unlock_fs();
+        return ESP_FAIL;
+    }
+
+    char file[FILE_NAME_SIZE];
+    if (!datalog_format_session_filename(fs_label, next_index, file, sizeof(file))) {
+        app_sdcard_unlock_fs();
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    datalog_session_lock();
+    s_session_active = true;
+    datalog_copy_token(s_session_dir, sizeof(s_session_dir), dir);
+    datalog_copy_token(s_session_file, sizeof(s_session_file), file);
+    datalog_copy_token(s_session_label, sizeof(s_session_label), fs_label);
+    datalog_session_unlock();
+
+    app_sdcard_unlock_fs();
+    ESP_LOGI(TAG, "session start %s/%s", dir, file);
+    return ESP_OK;
+}
+
+void app_datalog_stop_session(void)
+{
+    datalog_session_lock();
+    s_session_active = false;
+    s_session_dir[0] = '\0';
+    s_session_file[0] = '\0';
+    s_session_label[0] = '\0';
+    datalog_session_unlock();
+
+    if (app_sdcard_lock_fs(pdMS_TO_TICKS(2000))) {
+        datalog_close_raw_file();
+        app_sdcard_unlock_fs();
+    } else {
+        ESP_LOGW(TAG, "session stop: sd fs busy");
+    }
+}
+
+void app_datalog_set_default_raw_enabled(bool enable)
+{
+    s_default_raw_enabled = enable;
+}
+
+bool app_datalog_is_default_raw_enabled(void)
+{
+    return s_default_raw_enabled;
+}
+
 void app_datalog_stop(void)
 {
     s_datalog_enabled = false;
@@ -646,14 +935,20 @@ void app_datalog_log_event(const DatalogEvent_t *event)
     if (!event) {
         return;
     }
+    if (!app_sdcard_lock_fs(pdMS_TO_TICKS(2000))) {
+        ESP_LOGW(TAG, "event log skipped: sd fs busy");
+        return;
+    }
     if (!datalog_ensure_mounted()) {
         ESP_LOGW(TAG, "event log skipped: SD not mounted");
+        app_sdcard_unlock_fs();
         return;
     }
 
     char dir[DIR_BUF_SIZE];
     (void)datalog_build_daily_dir(dir, sizeof(dir));
     if (!datalog_ensure_dir(dir)) {
+        app_sdcard_unlock_fs();
         return;
     }
 
@@ -669,6 +964,7 @@ void app_datalog_log_event(const DatalogEvent_t *event)
     FILE *f = fopen(path, "a");
     if (!f) {
         ESP_LOGE(TAG, "event fopen failed: %s errno=%d (%s)", path, errno, strerror(errno));
+        app_sdcard_unlock_fs();
         return;
     }
 
@@ -683,6 +979,7 @@ void app_datalog_log_event(const DatalogEvent_t *event)
         if (fprintf(f, "%s", header) < 0) {
             ESP_LOGE(TAG, "event header write failed");
             fclose(f);
+            app_sdcard_unlock_fs();
             return;
         }
     }
@@ -707,16 +1004,19 @@ void app_datalog_log_event(const DatalogEvent_t *event)
     if (len < 0 || len >= (int)sizeof(line)) {
         ESP_LOGW(TAG, "event line format overflow");
         fclose(f);
+        app_sdcard_unlock_fs();
         return;
     }
     if (fwrite(line, 1, (size_t)len, f) != (size_t)len) {
         ESP_LOGW(TAG, "event write failed");
         fclose(f);
+        app_sdcard_unlock_fs();
         return;
     }
     fflush(f);
     (void)fsync(fileno(f));
     fclose(f);
+    app_sdcard_unlock_fs();
 
     ESP_LOGI(TAG, "event logged %s", path);
 }
@@ -734,14 +1034,20 @@ esp_err_t app_datalog_save_summary_batch(const DatalogSummary_t *rows, size_t co
     if (!rows || count == 0) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (!app_sdcard_lock_fs(pdMS_TO_TICKS(5000))) {
+        ESP_LOGW(TAG, "summary skipped: sd fs busy");
+        return ESP_FAIL;
+    }
     if (!datalog_ensure_mounted()) {
         ESP_LOGW(TAG, "summary skipped: SD not mounted");
+        app_sdcard_unlock_fs();
         return ESP_FAIL;
     }
 
     char dir[DIR_BUF_SIZE];
     (void)datalog_build_daily_dir(dir, sizeof(dir));
     if (!datalog_ensure_dir(dir)) {
+        app_sdcard_unlock_fs();
         return ESP_FAIL;
     }
 
@@ -753,6 +1059,7 @@ esp_err_t app_datalog_save_summary_batch(const DatalogSummary_t *rows, size_t co
     FILE *f = fopen(tmp_path, "w");
     if (!f) {
         ESP_LOGE(TAG, "summary fopen failed: %s errno=%d (%s)", tmp_path, errno, strerror(errno));
+        app_sdcard_unlock_fs();
         return ESP_FAIL;
     }
 
@@ -765,6 +1072,7 @@ esp_err_t app_datalog_save_summary_batch(const DatalogSummary_t *rows, size_t co
     if (fprintf(f, "%s", header) < 0) {
         ESP_LOGE(TAG, "summary header write failed");
         fclose(f);
+        app_sdcard_unlock_fs();
         return ESP_FAIL;
     }
 
@@ -794,9 +1102,11 @@ esp_err_t app_datalog_save_summary_batch(const DatalogSummary_t *rows, size_t co
 
     if (rename(tmp_path, path) != 0) {
         ESP_LOGE(TAG, "summary rename failed: %s errno=%d (%s)", path, errno, strerror(errno));
+        app_sdcard_unlock_fs();
         return ESP_FAIL;
     }
 
     ESP_LOGI(TAG, "summary saved %s", path);
+    app_sdcard_unlock_fs();
     return ESP_OK;
 }

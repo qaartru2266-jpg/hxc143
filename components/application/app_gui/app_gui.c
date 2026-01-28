@@ -19,6 +19,7 @@
 #include <time.h>
 
 #include "app_touch.h"
+#include "app_power.h"
 
 void app_gui_set_flow_var_int(int32_t var_id, int32_t value);
 void app_gui_set_flow_var_string(int32_t var_id, const char *value);
@@ -107,8 +108,15 @@ static void touch_read_cb(lv_indev_t * indev, lv_indev_data_t * data)
 
     int32_t x = 0, y = 0;
     bool pressed = app_touch_read(&x, &y); // 调用 C++ 那边的方法
+    
+    bool consume = app_power_on_touch(pressed);
 
-    if(pressed) {
+    if (consume) {
+        data->state = LV_INDEV_STATE_RELEASED;
+        return;
+    }
+
+    if (pressed) {
         data->state = LV_INDEV_STATE_PRESSED;
         data->point.x = x;
         data->point.y = y;

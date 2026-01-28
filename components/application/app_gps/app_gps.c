@@ -12,6 +12,7 @@
 #include "app_gps_parser.h"
 #include "app_state.h"
 #include "app_time.h"
+#include "app_control.h"
 #include "gps_interface.h"
 
 static const char *TAG = "gps";
@@ -25,6 +26,7 @@ static volatile bool s_gps_enabled = true;
 
 #define GPS_TASK_PERIOD_MS 100
 #define GPS_TIME_SYNC_THRESHOLD_SEC 60
+#define GPS_NMEA_LOG_PERIOD_MS 8000
 static TickType_t s_last_nmea_log = 0;
 
 static bool parse_two_digits(const char *text, int *out)
@@ -117,9 +119,12 @@ static void gps_try_sync_time(const char *line, const GNSS_Data *data)
 static void dispatch_sentence(const char *line)
 {
     TickType_t now = xTaskGetTickCount();
-    if (s_last_nmea_log == 0 || (now - s_last_nmea_log) >= pdMS_TO_TICKS(2000)) {
-        ESP_LOGI(TAG, "GPS NMEA: %s", line);
-        s_last_nmea_log = now;
+    if (s_last_nmea_log == 0 ||
+        (now - s_last_nmea_log) >= pdMS_TO_TICKS(GPS_NMEA_LOG_PERIOD_MS)) {
+        if (!app_control_is_quiet()) {
+            ESP_LOGI(TAG, "GPS NMEA: %s", line);
+            s_last_nmea_log = now;
+        }
     }
 
     GNSS_Data parsed = {0};

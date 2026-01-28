@@ -17,6 +17,7 @@
 
 #include "app_state.h"
 #include "app_sdcard.h"
+#include "freertos/semphr.h"
 #if CONFIG_JOFTMODE_ENABLE_ML
 #include "ml_window.h"
 #endif
@@ -41,6 +42,7 @@ static FILE *s_csv = NULL;
 static char s_csv_path[64] = {0};
 static char s_csv_buf[4096];
 static bool s_ready = false;
+static SemaphoreHandle_t s_fs_mutex = NULL;
 
 static TaskHandle_t s_logger_task = NULL;
 static int64_t s_last_logged_imu_ts = 0;
@@ -76,6 +78,24 @@ static esp_vfs_fat_sdmmc_mount_config_t s_mountcfg = {
     .max_files = 5,
     .allocation_unit_size = 0
 };
+
+bool app_sdcard_lock_fs(TickType_t timeout_ticks)
+{
+    if (!s_fs_mutex) {
+        s_fs_mutex = xSemaphoreCreateMutex();
+    }
+    if (!s_fs_mutex) {
+        return false;
+    }
+    return (xSemaphoreTake(s_fs_mutex, timeout_ticks) == pdTRUE);
+}
+
+void app_sdcard_unlock_fs(void)
+{
+    if (s_fs_mutex) {
+        xSemaphoreGive(s_fs_mutex);
+    }
+}
 
 static inline void csv_sync_now(void)
 {
@@ -148,6 +168,10 @@ static esp_err_t csv_open_create_header(void)
         ESP_LOGE(TAG, "SD not mounted");
         return ESP_FAIL;
     }
+    if (!app_sdcard_lock_fs(portMAX_DELAY)) {
+        ESP_LOGE(TAG, "SD fs lock failed");
+        return ESP_FAIL;
+    }
     make_unique_csv_path(s_csv_path, sizeof(s_csv_path));
     ESP_LOGW(TAG, "Create CSV: %s", s_csv_path);
 
@@ -155,6 +179,7 @@ static esp_err_t csv_open_create_header(void)
     if (!s_csv) {
         int e = errno;
         ESP_LOGE(TAG, "fopen failed: errno=%d (%s)", e, strerror(e));
+        app_sdcard_unlock_fs();
         return ESP_FAIL;
     }
 
@@ -172,6 +197,7 @@ static esp_err_t csv_open_create_header(void)
         ESP_LOGE(TAG, "write header failed: errno=%d (%s)", e, strerror(e));
         fclose(s_csv);
         s_csv = NULL;
+        app_sdcard_unlock_fs();
         return ESP_FAIL;
     }
 
@@ -179,6 +205,7 @@ static esp_err_t csv_open_create_header(void)
     s_lines_since_flush = 0;
     s_flush_since_sync = 0;
     s_ready = true;
+    app_sdcard_unlock_fs();
     ESP_LOGW(TAG, "CSV header OK & SYNCED");
     return ESP_OK;
 }
@@ -303,7 +330,11 @@ static void logger_step(void)
     );
 #endif
 
+    if (!app_sdcard_lock_fs(portMAX_DELAY)) {
+        return;
+    }
     append_csv_row(&imu, gps_valid);
+    app_sdcard_unlock_fs();
 }
 
 static void sdcard_logger_task(void *arg)

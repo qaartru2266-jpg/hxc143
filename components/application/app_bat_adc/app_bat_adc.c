@@ -15,12 +15,14 @@
 #include "app_gui.h"
 #include "ui.h"
 #include "vars.h"
+#include "app_control.h"
 
 #define APP_BAT_ADC_GPIO         GPIO_NUM_8
 #define APP_BAT_ADC_ATTEN        ADC_ATTEN_DB_12
 #define APP_BAT_ADC_BITWIDTH     ADC_BITWIDTH_12
 #define APP_BAT_ADC_SAMPLE_COUNT 8
 #define APP_BAT_ADC_PERIOD_MS    3000
+#define APP_BAT_ADC_LOG_PERIOD_MS 8000
 
 static const char *TAG = "app_bat_adc";
 
@@ -33,6 +35,7 @@ static adc_unit_t s_adc_unit;
 static adc_channel_t s_adc_channel;
 static bool s_calibrated;
 static TaskHandle_t s_task_handle;
+static TickType_t s_last_bat_log = 0;
 
 static bool adc_calibration_init(adc_unit_t unit, adc_atten_t atten,
                                  adc_bitwidth_t bitwidth, adc_cali_handle_t *out_handle)
@@ -124,6 +127,15 @@ static void bat_adc_task(void *arg)
 {
     (void)arg;
     for (;;) {
+        bool should_log = false;
+        if (!app_control_is_quiet()) {
+            TickType_t now = xTaskGetTickCount();
+            if (s_last_bat_log == 0 ||
+                (now - s_last_bat_log) >= pdMS_TO_TICKS(APP_BAT_ADC_LOG_PERIOD_MS)) {
+                should_log = true;
+                s_last_bat_log = now;
+            }
+        }
         int raw_avg = bat_adc_read_avg();
         if (s_calibrated) {
             int vadc_mv = 0;
@@ -147,12 +159,18 @@ static void bat_adc_task(void *arg)
                     esp_deep_sleep_start();
                 }
 
-                ESP_LOGI(TAG, "raw_avg=%d, Vadc=%dmV, Vbat=%.3fV", raw_avg, vadc_mv, vbat_v);
+                if (should_log) {
+                    ESP_LOGI(TAG, "raw_avg=%d, Vadc=%dmV, Vbat=%.3fV", raw_avg, vadc_mv, vbat_v);
+                }
             } else {
-                ESP_LOGI(TAG, "raw_avg=%d", raw_avg);
+                if (should_log) {
+                    ESP_LOGI(TAG, "raw_avg=%d", raw_avg);
+                }
             }
         } else {
-            ESP_LOGI(TAG, "raw_avg=%d", raw_avg);
+            if (should_log) {
+                ESP_LOGI(TAG, "raw_avg=%d", raw_avg);
+            }
         }
         vTaskDelay(pdMS_TO_TICKS(APP_BAT_ADC_PERIOD_MS));
     }
