@@ -28,7 +28,8 @@
 
 #define CALIB_SAMPLE_RATE_HZ 25
 #define CALIB_SAMPLE_PERIOD_MS (1000 / CALIB_SAMPLE_RATE_HZ)
-#define CALIB_GYRO_NORM_STD_THRESHOLD 20.0f
+#define CALIB_GYRO_NORM_STD_THRESHOLD 200.0f
+#define CALIB_START_DELAY_MS 5000
 
 #define CALIB_FILE "/sdcard/imu_calib.csv"
 
@@ -52,6 +53,23 @@ static const char *imu_calib_skip_ws(const char *s)
         ++s;
     }
     return s;
+}
+
+static bool imu_calib_parse_floats(const char *s, float out[6])
+{
+    const char *p = imu_calib_skip_ws(s);
+    for (int i = 0; i < 6; ++i) {
+        if (!p || !*p) {
+            return false;
+        }
+        char *end = NULL;
+        out[i] = strtof(p, &end);
+        if (end == p) {
+            return false;
+        }
+        p = imu_calib_skip_ws(end);
+    }
+    return true;
 }
 
 
@@ -121,6 +139,14 @@ static void imu_calib_log_bias(const char *prefix)
              prefix,
              s_acc_bias[0], s_acc_bias[1], s_acc_bias[2],
              s_gyro_bias[0], s_gyro_bias[1], s_gyro_bias[2]);
+}
+
+static void imu_calib_print_bias(const char *prefix)
+{
+    if (!s_bias_loaded) {
+        app_imu_calib_init();
+    }
+    imu_calib_log_bias(prefix);
 }
 
 void app_imu_calib_init(void)
@@ -211,6 +237,12 @@ esp_err_t app_imu_calib_run(int seconds)
         return ESP_ERR_INVALID_ARG;
     }
 
+    if (CALIB_START_DELAY_MS > 0) {
+        ESP_LOGI(TAG, "imu calib will start in %d ms, keep device steady", CALIB_START_DELAY_MS);
+        vTaskDelay(pdMS_TO_TICKS(CALIB_START_DELAY_MS));
+    }
+
+    ESP_LOGI(TAG, "imu calib start: %d seconds", seconds);
     app_control_stop_all();
     vTaskDelay(pdMS_TO_TICKS(200));
 
@@ -302,6 +334,57 @@ bool app_imu_calib_handle_line(const char *line)
     }
 
     const char *cmd = imu_calib_skip_ws(line);
+    if (strncmp(cmd, "imu_calib_show", 14) == 0) {
+        imu_calib_print_bias("bias");
+        return true;
+    }
+    if (strncmp(cmd, "imu_calib_set", 13) == 0) {
+        float v[6] = {0};
+        if (!imu_calib_parse_floats(cmd + 13, v)) {
+            ESP_LOGW(TAG, "usage: imu_calib_set ax ay az gx gy gz");
+            return true;
+        }
+        s_acc_bias[0] = v[0];
+        s_acc_bias[1] = v[1];
+        s_acc_bias[2] = v[2];
+        s_gyro_bias[0] = v[3];
+        s_gyro_bias[1] = v[4];
+        s_gyro_bias[2] = v[5];
+        s_bias_loaded = true;
+        esp_err_t err = imu_calib_store_bias();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "set store failed: %s", esp_err_to_name(err));
+            return true;
+        }
+        imu_calib_log_bias("bias set");
+        imu_calib_write_csv("MANUAL_SET");
+        return true;
+    }
+    if (strncmp(cmd, "imu_calib_add", 13) == 0) {
+        float v[6] = {0};
+        if (!imu_calib_parse_floats(cmd + 13, v)) {
+            ESP_LOGW(TAG, "usage: imu_calib_add dax day daz dgx dgy dgz");
+            return true;
+        }
+        if (!s_bias_loaded) {
+            app_imu_calib_init();
+        }
+        s_acc_bias[0] += v[0];
+        s_acc_bias[1] += v[1];
+        s_acc_bias[2] += v[2];
+        s_gyro_bias[0] += v[3];
+        s_gyro_bias[1] += v[4];
+        s_gyro_bias[2] += v[5];
+        s_bias_loaded = true;
+        esp_err_t err = imu_calib_store_bias();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "add store failed: %s", esp_err_to_name(err));
+            return true;
+        }
+        imu_calib_log_bias("bias add");
+        imu_calib_write_csv("MANUAL_ADD");
+        return true;
+    }
     if (strncmp(cmd, "imu_calib_reset", 15) == 0) {
         (void)app_imu_calib_reset();
         return true;
@@ -313,7 +396,7 @@ bool app_imu_calib_handle_line(const char *line)
             ESP_LOGW(TAG, "usage: imu_calib <seconds>");
             return true;
         }
-        ESP_LOGI(TAG, "imu calib start: %d seconds", seconds);
+        ESP_LOGI(TAG, "imu calib queued: start in %d ms, duration %d seconds", CALIB_START_DELAY_MS, seconds);
         (void)app_imu_calib_run(seconds);
         return true;
     }
