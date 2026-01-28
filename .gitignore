@@ -9,6 +9,7 @@ sdkconfig.*.old
 
 # Managed components are generated locally
 managed_components/
+eez120/
 dependencies.lock
 
 # IDE/editor settings
