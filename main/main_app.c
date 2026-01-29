@@ -28,9 +28,7 @@
 #include "app_quiet.h"
 #include "sdkconfig.h"
 
-#if CONFIG_JOFTMODE_ENABLE_ML
-#include "ml_window.h"
-#endif
+
 
 void app_main(void)
 {
@@ -47,9 +45,6 @@ void app_main(void)
     app_power_start();
     app_bat_adc_start();
 
-#if CONFIG_JOFTMODE_ENABLE_ML
-    ml_window_init();
-#endif
 
     app_datalog_start();
     printf("MODE: DATA_COLLECTION (MOCK disabled)\n");

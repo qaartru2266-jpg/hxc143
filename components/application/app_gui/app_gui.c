@@ -23,6 +23,7 @@
 
 void app_gui_set_flow_var_int(int32_t var_id, int32_t value);
 void app_gui_set_flow_var_string(int32_t var_id, const char *value);
+int32_t app_gui_get_flow_var_int(int32_t var_id, int32_t default_value);
 
 static const char *TAG = "app_gui";
 static volatile bool s_ui_ready = false;
@@ -30,8 +31,10 @@ static display_hal_t s_hal;              //  s_hal：保�?display_hal
 static esp_lcd_panel_handle_t s_panel_handle = NULL;   //屏幕句柄，用于开关屏
 static bool s_screen_on = true;  //屏幕状�?
 static lv_indev_t *s_touch_indev = NULL; //LVGL 输入设备
+static int32_t s_last_brightness = -1;
 // Set to 1 to run display_hal_test_once() during startup (useful for panel bring-up).
 #define APP_GUI_RUN_DISPLAY_TEST_ONCE 0
+#define APP_GUI_DEFAULT_BRIGHTNESS 100  // 1-100
 
 #if 0
 
@@ -186,6 +189,12 @@ static void gui_task(void *arg)
         vTaskDelete(NULL);
         return;
     }
+    {
+        esp_err_t br_err = display_hal_set_brightness(&s_hal, APP_GUI_DEFAULT_BRIGHTNESS);
+        if (br_err != ESP_OK) {
+            ESP_LOGW(TAG, "set brightness failed: %d", (int)br_err);
+        }
+    }
     s_panel_handle = s_hal.panel;
     s_screen_on = true;
 
@@ -232,6 +241,8 @@ static void gui_task(void *arg)
     lv_indev_set_display(s_touch_indev, disp);                // 绑定到当前屏幕
     ui_init();
     s_ui_ready = true;
+    app_gui_set_flow_var_int(FLOW_GLOBAL_VARIABLE_BRIGHTNESS_LEVEL, APP_GUI_DEFAULT_BRIGHTNESS);
+    s_last_brightness = APP_GUI_DEFAULT_BRIGHTNESS;
 
     // ... 原有�?lv_obj_set_style_bg_color ...
 
@@ -293,6 +304,16 @@ static void gui_task(void *arg)
         lv_timer_handler();
         update_time_vars();
         ui_tick();
+        {
+            int32_t brightness = app_gui_get_flow_var_int(
+                FLOW_GLOBAL_VARIABLE_BRIGHTNESS_LEVEL,
+                APP_GUI_DEFAULT_BRIGHTNESS
+            );
+            if (brightness != s_last_brightness) {
+                s_last_brightness = brightness;
+                (void)display_hal_set_brightness(&s_hal, (uint8_t)brightness);
+            }
+        }
 
 
         vTaskDelay(pdMS_TO_TICKS(10));

@@ -42,6 +42,16 @@ static const char *TAG = "display_hal";
 // QSPI clock for panel IO (Hz). Try 60MHz first, back off if unstable.
 #define LCD_QSPI_PCLK_HZ  (60 * 1000 * 1000)
 
+// SH8601 QSPI command framing
+#define LCD_OPCODE_WRITE_CMD   (0x02ULL)
+#define LCD_CMD_SET_BRIGHTNESS (0x51)
+
+// 1-100 user scale mapped to DCS 0-255 with a non-zero floor
+#define BRIGHTNESS_MIN_LEVEL   (1)
+#define BRIGHTNESS_MAX_LEVEL   (100)
+#define BRIGHTNESS_MIN_DCS     (8)
+#define BRIGHTNESS_MAX_DCS     (255)
+
 
 // ====== SH8601 初始化命令表 ======
 // 0x77: 像素格式；0x55 => RGB888（与 bits_per_pixel=24 对应），给 SH8601 面板的初始化命令表，包括像素格式、显示区域、开屏指令等。
@@ -77,6 +87,14 @@ static bool on_color_trans_done(esp_lcd_panel_io_handle_t io,
         xSemaphoreGiveFromISR(hal->trans_done, &hp_woken);
     }
     return hp_woken == pdTRUE;
+}
+
+static esp_err_t sh8601_tx_param(esp_lcd_panel_io_handle_t io, int lcd_cmd, const void *param, size_t param_size)
+{
+    uint32_t cmd = (uint32_t)(lcd_cmd & 0xff);
+    cmd <<= 8;
+    cmd |= ((uint32_t)LCD_OPCODE_WRITE_CMD << 24);
+    return esp_lcd_panel_io_tx_param(io, cmd, param, param_size);
 }
 // TE 引脚中断服务函数，释放 te_sema，用于“等到屏幕刷新时机再画”。
 static void IRAM_ATTR on_te_isr(void *arg)
@@ -219,6 +237,22 @@ static esp_err_t wait_flush(display_hal_t *hal, uint32_t timeout_ms)
         return ESP_ERR_TIMEOUT;
     }
     return ESP_OK;
+}
+
+esp_err_t display_hal_set_brightness(display_hal_t *hal, uint8_t level_1_100)
+{
+    if (!hal || !hal->io) return ESP_ERR_INVALID_ARG;
+
+    if (level_1_100 < BRIGHTNESS_MIN_LEVEL) level_1_100 = BRIGHTNESS_MIN_LEVEL;
+    if (level_1_100 > BRIGHTNESS_MAX_LEVEL) level_1_100 = BRIGHTNESS_MAX_LEVEL;
+
+    const uint32_t range = (uint32_t)(BRIGHTNESS_MAX_DCS - BRIGHTNESS_MIN_DCS);
+    const uint32_t val = BRIGHTNESS_MIN_DCS +
+        (uint32_t)(level_1_100 - BRIGHTNESS_MIN_LEVEL) * range /
+        (BRIGHTNESS_MAX_LEVEL - BRIGHTNESS_MIN_LEVEL);
+    const uint8_t dcs = (uint8_t)val;
+
+    return sh8601_tx_param(hal->io, LCD_CMD_SET_BRIGHTNESS, &dcs, 1);
 }
 
 // ---- 只画一次的测试：整屏填色 + 5 条白线 ----

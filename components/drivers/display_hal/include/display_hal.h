@@ -22,3 +22,6 @@ esp_err_t display_hal_init(display_hal_t *out);
 // Optional: draw a simple test pattern (full-screen fill + 5 white lines)
 esp_err_t display_hal_test_once(display_hal_t *hal);
 
+// Set panel brightness by level 1-100 (1 is still visible).
+esp_err_t display_hal_set_brightness(display_hal_t *hal, uint8_t level_1_100);
+

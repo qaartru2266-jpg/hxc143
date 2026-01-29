@@ -16,20 +16,29 @@ typedef struct _objects_t {
     lv_obj_t *chart_page;
     lv_obj_t *menu_page;
     lv_obj_t *developer_page;
+    lv_obj_t *fish_page;
+    lv_obj_t *reset_page;
     lv_obj_t *test;
+    lv_obj_t *test_1;
     lv_obj_t *back_main;
+    lv_obj_t *obj0;
     lv_obj_t *walk_data_get;
     lv_obj_t *stationary_data_get;
-    lv_obj_t *obj0;
     lv_obj_t *obj1;
     lv_obj_t *obj2;
     lv_obj_t *obj3;
+    lv_obj_t *obj4;
+    lv_obj_t *back_main_1;
+    lv_obj_t *back_main_2;
     lv_obj_t *current_time;
     lv_obj_t *bar_battery;
     lv_obj_t *current_date;
     lv_obj_t *label_battery;
-    lv_obj_t *obj4;
     lv_obj_t *obj5;
+    lv_obj_t *obj6;
+    lv_obj_t *obj7;
+    lv_obj_t *current_time_1;
+    lv_obj_t *current_date_1;
 } objects_t;
 
 extern objects_t objects;
@@ -43,6 +52,8 @@ enum ScreensEnum {
     SCREEN_ID_CHART_PAGE = 6,
     SCREEN_ID_MENU_PAGE = 7,
     SCREEN_ID_DEVELOPER_PAGE = 8,
+    SCREEN_ID_FISH_PAGE = 9,
+    SCREEN_ID_RESET_PAGE = 10,
 };
 
 void create_screen_main_page();
@@ -76,6 +87,14 @@ void tick_screen_menu_page();
 void create_screen_developer_page();
 void delete_screen_developer_page();
 void tick_screen_developer_page();
+
+void create_screen_fish_page();
+void delete_screen_fish_page();
+void tick_screen_fish_page();
+
+void create_screen_reset_page();
+void delete_screen_reset_page();
+void tick_screen_reset_page();
 
 void create_screen_by_id(enum ScreensEnum screenId);
 void delete_screen_by_id(enum ScreensEnum screenId);

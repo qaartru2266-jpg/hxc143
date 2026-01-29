@@ -4,6 +4,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_system.h"
 
 #include "app_vibration.h"
 #include "app_gui.h"
@@ -13,6 +14,7 @@
 #define TOUCH_INT_GPIO      ((gpio_num_t)11)  // keep in sync with app_touch.cpp
 #define SCAN_INTERVAL_MS    20
 #define LONG_PRESS_MS       2000
+#define LONG_PRESS_RESET_MS 5000
 #define SHORT_PRESS_MIN_MS  60
 #define INACTIVITY_TIMEOUT_MS 30000
 
@@ -103,6 +105,7 @@ static void key_task(void *arg)
 {
     bool pressed_prev = false;
     uint32_t pressed_ms = 0;
+    bool reset_sent = false;
 
     for (;;) {
         bool pressed = power_key_is_pressed();
@@ -111,6 +114,7 @@ static void key_task(void *arg)
                 s_block_key_until_release = false;
                 pressed_prev = false;
                 pressed_ms = 0;
+                reset_sent = false;
             } else {
                 pressed_prev = true;
             }
@@ -129,16 +133,25 @@ static void key_task(void *arg)
                 pressed_ms += SCAN_INTERVAL_MS;
             } else {
                 pressed_ms = SCAN_INTERVAL_MS;
+                reset_sent = false;
+            }
+
+            if (!reset_sent && pressed_ms >= LONG_PRESS_RESET_MS) {
+                reset_sent = true;
+                POWER_LOGD("power key long press reset");
+                vTaskDelay(pdMS_TO_TICKS(SCAN_INTERVAL_MS));
+                esp_restart();
             }
         } else {
             if (pressed_prev) {
-                if (pressed_ms >= SHORT_PRESS_MIN_MS && pressed_ms < LONG_PRESS_MS) {
+                if (!reset_sent && pressed_ms >= SHORT_PRESS_MIN_MS && pressed_ms < LONG_PRESS_MS) {
                     if (s_power_on) {
                         apply_power_state(false);
                     }
                 }
             }
             pressed_ms = 0;
+            reset_sent = false;
         }
 
         pressed_prev = pressed;

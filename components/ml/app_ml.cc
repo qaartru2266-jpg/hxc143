@@ -6,6 +6,10 @@ static const char* TAG = "app_ml";
 
 bool app_ml_init(void) {
     bool ok = ml_init();
-    ESP_LOGI(TAG, "ml_init: %s", ok ? "OK" : "FAIL");
+    if (ok) {
+        ESP_LOGI(TAG, "ml_init OK");
+    } else {
+        ESP_LOGE(TAG, "ml_init FAIL");
+    }
     return ok;
 }

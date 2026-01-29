@@ -23,7 +23,6 @@
 #define TAG "app_imu_calib"
 
 #define IMU_CALIB_NVS_NAMESPACE "imu_calib"
-#define IMU_CALIB_KEY_ACC "acc_bias"
 #define IMU_CALIB_KEY_GYRO "gyro_bias"
 
 #define CALIB_SAMPLE_RATE_HZ 25
@@ -33,14 +32,12 @@
 
 #define CALIB_FILE "/sdcard/imu_calib.csv"
 
-static float s_acc_bias[3] = {0.0f, 0.0f, 0.0f};
 static float s_gyro_bias[3] = {0.0f, 0.0f, 0.0f};
 static bool s_bias_loaded = false;
 static const char *imu_calib_skip_ws(const char *s);
 
 static void imu_calib_set_bias_zero(void)
 {
-    memset(s_acc_bias, 0, sizeof(s_acc_bias));
     memset(s_gyro_bias, 0, sizeof(s_gyro_bias));
 }
 
@@ -55,21 +52,20 @@ static const char *imu_calib_skip_ws(const char *s)
     return s;
 }
 
-static bool imu_calib_parse_floats(const char *s, float out[6])
+static int imu_calib_parse_floats(const char *s, float out[6])
 {
     const char *p = imu_calib_skip_ws(s);
-    for (int i = 0; i < 6; ++i) {
-        if (!p || !*p) {
-            return false;
-        }
+    int count = 0;
+    while (count < 6 && p && *p) {
         char *end = NULL;
-        out[i] = strtof(p, &end);
+        out[count] = strtof(p, &end);
         if (end == p) {
-            return false;
+            break;
         }
+        ++count;
         p = imu_calib_skip_ws(end);
     }
-    return true;
+    return count;
 }
 
 
@@ -97,13 +93,7 @@ static esp_err_t imu_calib_load_bias(void)
         return err;
     }
 
-    size_t len = sizeof(s_acc_bias);
-    err = nvs_get_blob(handle, IMU_CALIB_KEY_ACC, s_acc_bias, &len);
-    if (err != ESP_OK || len != sizeof(s_acc_bias)) {
-        imu_calib_set_bias_zero();
-    }
-
-    len = sizeof(s_gyro_bias);
+    size_t len = sizeof(s_gyro_bias);
     err = nvs_get_blob(handle, IMU_CALIB_KEY_GYRO, s_gyro_bias, &len);
     if (err != ESP_OK || len != sizeof(s_gyro_bias)) {
         memset(s_gyro_bias, 0, sizeof(s_gyro_bias));
@@ -122,10 +112,7 @@ static esp_err_t imu_calib_store_bias(void)
         return err;
     }
 
-    err = nvs_set_blob(handle, IMU_CALIB_KEY_ACC, s_acc_bias, sizeof(s_acc_bias));
-    if (err == ESP_OK) {
-        err = nvs_set_blob(handle, IMU_CALIB_KEY_GYRO, s_gyro_bias, sizeof(s_gyro_bias));
-    }
+    err = nvs_set_blob(handle, IMU_CALIB_KEY_GYRO, s_gyro_bias, sizeof(s_gyro_bias));
     if (err == ESP_OK) {
         err = nvs_commit(handle);
     }
@@ -135,9 +122,8 @@ static esp_err_t imu_calib_store_bias(void)
 
 static void imu_calib_log_bias(const char *prefix)
 {
-    ESP_LOGI(TAG, "%s acc_bias=(%.2f, %.2f, %.2f) gyro_bias=(%.2f, %.2f, %.2f)",
+    ESP_LOGI(TAG, "%s gyro_bias=(%.2f, %.2f, %.2f)",
              prefix,
-             s_acc_bias[0], s_acc_bias[1], s_acc_bias[2],
              s_gyro_bias[0], s_gyro_bias[1], s_gyro_bias[2]);
 }
 
@@ -174,15 +160,10 @@ void app_imu_calib_apply(int16_t *ax, int16_t *ay, int16_t *az,
         app_imu_calib_init();
     }
 
-    if (ax) {
-        *ax = (int16_t)lrintf((float)(*ax) - s_acc_bias[0]);
-    }
-    if (ay) {
-        *ay = (int16_t)lrintf((float)(*ay) - s_acc_bias[1]);
-    }
-    if (az) {
-        *az = (int16_t)lrintf((float)(*az) - s_acc_bias[2]);
-    }
+    (void)ax;
+    (void)ay;
+    (void)az;
+
     if (gx) {
         *gx = (int16_t)lrintf((float)(*gx) - s_gyro_bias[0]);
     }
@@ -212,16 +193,15 @@ static void imu_calib_write_csv(const char *status)
     }
 
     if (need_header) {
-        fprintf(f, "timestamp,acc_bias_x,acc_bias_y,acc_bias_z,gyro_bias_x,gyro_bias_y,gyro_bias_z,status\r\n");
+        fprintf(f, "timestamp,gyro_bias_x,gyro_bias_y,gyro_bias_z,status\r\n");
     }
 
     time_t now = time(NULL);
     if (now <= 0) {
         now = (time_t)(esp_timer_get_time() / 1000000);
     }
-    fprintf(f, "%lld,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%s\r\n",
+    fprintf(f, "%lld,%.3f,%.3f,%.3f,%s\r\n",
             (long long)now,
-            s_acc_bias[0], s_acc_bias[1], s_acc_bias[2],
             s_gyro_bias[0], s_gyro_bias[1], s_gyro_bias[2],
             status ? status : "UNKNOWN");
     fflush(f);
@@ -250,7 +230,6 @@ esp_err_t app_imu_calib_run(int seconds)
     qmi8658_init();
 
     int total_samples = seconds * CALIB_SAMPLE_RATE_HZ;
-    double acc_sum[3] = {0.0, 0.0, 0.0};
     double gyro_sum[3] = {0.0, 0.0, 0.0};
     double gyro_norm_sum = 0.0;
     double gyro_norm_sq_sum = 0.0;
@@ -260,9 +239,6 @@ esp_err_t app_imu_calib_run(int seconds)
         t_sQMI8658 sample = {0};
         qmi8658_Read_AccAndGry(&sample);
 
-        acc_sum[0] += sample.acc_x;
-        acc_sum[1] += sample.acc_y;
-        acc_sum[2] += sample.acc_z;
         gyro_sum[0] += sample.gyr_x;
         gyro_sum[1] += sample.gyr_y;
         gyro_sum[2] += sample.gyr_z;
@@ -291,9 +267,6 @@ esp_err_t app_imu_calib_run(int seconds)
         return ESP_FAIL;
     }
 
-    s_acc_bias[0] = (float)(acc_sum[0] / (double)total_samples);
-    s_acc_bias[1] = (float)(acc_sum[1] / (double)total_samples);
-    s_acc_bias[2] = (float)(acc_sum[2] / (double)total_samples);
     s_gyro_bias[0] = (float)(gyro_sum[0] / (double)total_samples);
     s_gyro_bias[1] = (float)(gyro_sum[1] / (double)total_samples);
     s_gyro_bias[2] = (float)(gyro_sum[2] / (double)total_samples);
@@ -340,16 +313,20 @@ bool app_imu_calib_handle_line(const char *line)
     }
     if (strncmp(cmd, "imu_calib_set", 13) == 0) {
         float v[6] = {0};
-        if (!imu_calib_parse_floats(cmd + 13, v)) {
-            ESP_LOGW(TAG, "usage: imu_calib_set ax ay az gx gy gz");
+        int count = imu_calib_parse_floats(cmd + 13, v);
+        if (count != 3 && count != 6) {
+            ESP_LOGW(TAG, "usage: imu_calib_set gx gy gz  OR  imu_calib_set ax ay az gx gy gz");
             return true;
         }
-        s_acc_bias[0] = v[0];
-        s_acc_bias[1] = v[1];
-        s_acc_bias[2] = v[2];
-        s_gyro_bias[0] = v[3];
-        s_gyro_bias[1] = v[4];
-        s_gyro_bias[2] = v[5];
+        if (count == 3) {
+            s_gyro_bias[0] = v[0];
+            s_gyro_bias[1] = v[1];
+            s_gyro_bias[2] = v[2];
+        } else {
+            s_gyro_bias[0] = v[3];
+            s_gyro_bias[1] = v[4];
+            s_gyro_bias[2] = v[5];
+        }
         s_bias_loaded = true;
         esp_err_t err = imu_calib_store_bias();
         if (err != ESP_OK) {
@@ -362,19 +339,23 @@ bool app_imu_calib_handle_line(const char *line)
     }
     if (strncmp(cmd, "imu_calib_add", 13) == 0) {
         float v[6] = {0};
-        if (!imu_calib_parse_floats(cmd + 13, v)) {
-            ESP_LOGW(TAG, "usage: imu_calib_add dax day daz dgx dgy dgz");
+        int count = imu_calib_parse_floats(cmd + 13, v);
+        if (count != 3 && count != 6) {
+            ESP_LOGW(TAG, "usage: imu_calib_add dgx dgy dgz  OR  imu_calib_add dax day daz dgx dgy dgz");
             return true;
         }
         if (!s_bias_loaded) {
             app_imu_calib_init();
         }
-        s_acc_bias[0] += v[0];
-        s_acc_bias[1] += v[1];
-        s_acc_bias[2] += v[2];
-        s_gyro_bias[0] += v[3];
-        s_gyro_bias[1] += v[4];
-        s_gyro_bias[2] += v[5];
+        if (count == 3) {
+            s_gyro_bias[0] += v[0];
+            s_gyro_bias[1] += v[1];
+            s_gyro_bias[2] += v[2];
+        } else {
+            s_gyro_bias[0] += v[3];
+            s_gyro_bias[1] += v[4];
+            s_gyro_bias[2] += v[5];
+        }
         s_bias_loaded = true;
         esp_err_t err = imu_calib_store_bias();
         if (err != ESP_OK) {
