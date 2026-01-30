@@ -5,6 +5,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 
 #include "app_vibration.h"
 #include "app_gui.h"
@@ -17,6 +18,7 @@
 #define LONG_PRESS_RESET_MS 5000
 #define SHORT_PRESS_MIN_MS  60
 #define INACTIVITY_TIMEOUT_MS 30000
+#define TOUCH_WAKE_HOLD_MS 120
 
 static const char *TAG = "app_power";
 
@@ -37,6 +39,7 @@ static volatile bool s_low_power_mode = false;
 static volatile bool s_block_key_until_release = false;
 static volatile TickType_t s_last_touch_tick = 0;
 static volatile bool s_ignore_touch_until_release = false;
+static int64_t s_touch_press_start_us = 0;
 
 static void apply_power_state(bool on)
 {
@@ -46,13 +49,11 @@ static void apply_power_state(bool on)
     if (on) {
         s_last_touch_tick = xTaskGetTickCount();
         s_block_key_until_release = true;
-        app_vibration_stop();        // �������ܴ��ڵ�����
-        app_vibration_pulse_ms(120); // ������ʾ
+        app_vibration_stop();        // �������ܴ��ڵ����� // ������ʾ
         app_gui_screen_on();
     } else {
         s_ignore_touch_until_release = false;
-        app_vibration_stop();
-        app_vibration_pulse_ms(80);  // �ػ���ʾ
+        app_vibration_stop();  // �ػ���ʾ
         app_gui_screen_off();
     }
 }
@@ -67,8 +68,14 @@ bool app_power_on_touch(bool pressed)
     if (pressed) {
         s_last_touch_tick = xTaskGetTickCount();
         if (s_low_power_mode) {
-            apply_power_state(true);
-            s_ignore_touch_until_release = true;
+            if (s_touch_press_start_us == 0) {
+                s_touch_press_start_us = esp_timer_get_time();
+            }
+            int64_t held_ms = (esp_timer_get_time() - s_touch_press_start_us) / 1000;
+            if (!s_ignore_touch_until_release && held_ms >= TOUCH_WAKE_HOLD_MS) {
+                apply_power_state(true);
+                s_ignore_touch_until_release = true;
+            }
             return true;
         }
         if (s_ignore_touch_until_release) {
@@ -80,6 +87,7 @@ bool app_power_on_touch(bool pressed)
     if (s_ignore_touch_until_release) {
         s_ignore_touch_until_release = false;
     }
+    s_touch_press_start_us = 0;
     return false;
 }
 

@@ -8,4 +8,6 @@ idf_component_register(
         "."
         "include"
         "model"
+    PRIV_REQUIRES
+        esp_psram
 )

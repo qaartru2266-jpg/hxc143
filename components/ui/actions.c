@@ -4,10 +4,12 @@
 #include <string.h>
 
 #include "app_datalog.h"
+#include "app_antenna.h"
 #include "esp_log.h"
 #include "screens.h"
 
 static const char *TAG = "ui_actions";
+static bool s_ignore_wifi_action = false;
 
 static bool label_is_active(const char *label,
                             bool walk_on,
@@ -126,4 +128,38 @@ void action_on_subway_data_get(lv_event_t *e)
 {
     (void)e;
     update_datalog_state("subway");
+}
+
+void action_on_wifi(lv_event_t *e)
+{
+    if (s_ignore_wifi_action) {
+        return;
+    }
+    lv_obj_t *obj = lv_event_get_target(e);
+    bool enabled = obj && lv_obj_has_state(obj, LV_STATE_CHECKED);
+    if (enabled) {
+        app_antenna_time_sync_request(30000);
+        ESP_LOGI(TAG, "wifi time sync requested");
+    } else {
+        app_antenna_set_wifi_enabled(false);
+        ESP_LOGI(TAG, "wifi disabled");
+    }
+}
+
+void ui_set_wifi_toggle(bool enabled)
+{
+    if (!objects.wifi) {
+        return;
+    }
+    bool is_on = lv_obj_has_state(objects.wifi, LV_STATE_CHECKED);
+    if (is_on == enabled) {
+        return;
+    }
+    s_ignore_wifi_action = true;
+    if (enabled) {
+        lv_obj_add_state(objects.wifi, LV_STATE_CHECKED);
+    } else {
+        lv_obj_clear_state(objects.wifi, LV_STATE_CHECKED);
+    }
+    s_ignore_wifi_action = false;
 }

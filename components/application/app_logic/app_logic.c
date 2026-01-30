@@ -18,18 +18,12 @@
 #define TSM_MIN_HOLD_MS 10000
 #define TSM_SUMMARY_INTERVAL_MS 60000
 
-#define MOCK_TASK_STACK 4096
-#define MOCK_TASK_PRIO 4
-#define MOCK_PERIOD_MS 100
-#define MOCK_TOTAL_MS 240000
-#define MOCK_STAGE1_MS 60000
-#define MOCK_STAGE2_MS 180000
 
 static const float k_carbon_factor_g_per_min[TRAFFIC_MODE_COUNT] = {
     [TRAFFIC_MODE_UNKNOWN] = 0.0f,
     [TRAFFIC_MODE_STATIONARY] = 0.0f,
     [TRAFFIC_MODE_WALK] = 0.0f,
-    [TRAFFIC_MODE_BIKE_EBIKE] = 1.2f,
+    [TRAFFIC_MODE_BIKE] = 1.2f,
     [TRAFFIC_MODE_CAR] = 12.0f,
     [TRAFFIC_MODE_BUS] = 6.5f,
     [TRAFFIC_MODE_METRO] = 4.2f,
@@ -38,7 +32,7 @@ static const float k_carbon_factor_g_per_min[TRAFFIC_MODE_COUNT] = {
 static const TrafficMode_t k_summary_modes[] = {
     TRAFFIC_MODE_STATIONARY,
     TRAFFIC_MODE_WALK,
-    TRAFFIC_MODE_BIKE_EBIKE,
+    TRAFFIC_MODE_BIKE,
     TRAFFIC_MODE_CAR,
     TRAFFIC_MODE_BUS,
     TRAFFIC_MODE_METRO,
@@ -46,8 +40,6 @@ static const TrafficMode_t k_summary_modes[] = {
 };
 
 static TrafficStateMachine s_tsm;
-static TaskHandle_t s_mock_task = NULL;
-
 const char *traffic_mode_to_str(TrafficMode_t mode)
 {
     switch (mode) {
@@ -55,8 +47,8 @@ const char *traffic_mode_to_str(TrafficMode_t mode)
         return "STATIONARY";
     case TRAFFIC_MODE_WALK:
         return "WALK";
-    case TRAFFIC_MODE_BIKE_EBIKE:
-        return "BIKE_EBIKE";
+    case TRAFFIC_MODE_BIKE:
+        return "BIKE";
     case TRAFFIC_MODE_CAR:
         return "CAR";
     case TRAFFIC_MODE_BUS:
@@ -256,47 +248,6 @@ void app_logic_flush(int64_t uptime_ms)
     tsm_flush(&s_tsm, uptime_ms);
 }
 
-static void app_logic_mock_task(void *arg)
-{
-    (void)arg;
-    int64_t start_ms = esp_timer_get_time() / 1000;
-    TickType_t last_wake = xTaskGetTickCount();
-    int64_t last_bucket = -1;
-    int noise_remaining = 0;
-
-    while (1) {
-        int64_t now_ms = esp_timer_get_time() / 1000;
-        int64_t elapsed_ms = now_ms - start_ms;
-        if (elapsed_ms >= MOCK_TOTAL_MS) {
-            break;
-        }
-
-        TrafficMode_t mode = TRAFFIC_MODE_STATIONARY;
-        if (elapsed_ms < MOCK_STAGE1_MS) {
-            int64_t bucket = elapsed_ms / 10000;
-            if (bucket != last_bucket) {
-                last_bucket = bucket;
-                noise_remaining = 1 + (esp_random() % 2);
-            }
-            if (noise_remaining > 0) {
-                mode = TRAFFIC_MODE_CAR;
-                noise_remaining--;
-            }
-        } else if (elapsed_ms < MOCK_STAGE2_MS) {
-            mode = TRAFFIC_MODE_WALK;
-        } else {
-            mode = TRAFFIC_MODE_BUS;
-        }
-
-        tsm_input_mode(mode, 0.9f, now_ms);
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(MOCK_PERIOD_MS));
-    }
-
-    app_logic_flush(esp_timer_get_time() / 1000);
-    ESP_LOGI(TAG, "MOCK: done");
-    vTaskDelete(NULL);
-}
-
 void app_logic_start(void)
 {
     static bool started = false;
@@ -306,7 +257,4 @@ void app_logic_start(void)
     started = true;
 
     tsm_init(&s_tsm);
-    if (!s_mock_task) {
-        xTaskCreate(app_logic_mock_task, "mock_scenario", MOCK_TASK_STACK, NULL, MOCK_TASK_PRIO, &s_mock_task);
-    }
 }

@@ -10,16 +10,15 @@ extern "C" {
 typedef struct _objects_t {
     lv_obj_t *main_page;
     lv_obj_t *control_page;
-    lv_obj_t *test_page;
     lv_obj_t *about_page;
     lv_obj_t *calendar_page;
-    lv_obj_t *chart_page;
     lv_obj_t *menu_page;
     lv_obj_t *developer_page;
     lv_obj_t *fish_page;
     lv_obj_t *reset_page;
     lv_obj_t *test;
     lv_obj_t *test_1;
+    lv_obj_t *wifi;
     lv_obj_t *back_main;
     lv_obj_t *obj0;
     lv_obj_t *walk_data_get;
@@ -37,6 +36,7 @@ typedef struct _objects_t {
     lv_obj_t *obj5;
     lv_obj_t *obj6;
     lv_obj_t *obj7;
+    lv_obj_t *obj8;
     lv_obj_t *current_time_1;
     lv_obj_t *current_date_1;
 } objects_t;
@@ -46,14 +46,12 @@ extern objects_t objects;
 enum ScreensEnum {
     SCREEN_ID_MAIN_PAGE = 1,
     SCREEN_ID_CONTROL_PAGE = 2,
-    SCREEN_ID_TEST_PAGE = 3,
-    SCREEN_ID_ABOUT_PAGE = 4,
-    SCREEN_ID_CALENDAR_PAGE = 5,
-    SCREEN_ID_CHART_PAGE = 6,
-    SCREEN_ID_MENU_PAGE = 7,
-    SCREEN_ID_DEVELOPER_PAGE = 8,
-    SCREEN_ID_FISH_PAGE = 9,
-    SCREEN_ID_RESET_PAGE = 10,
+    SCREEN_ID_ABOUT_PAGE = 3,
+    SCREEN_ID_CALENDAR_PAGE = 4,
+    SCREEN_ID_MENU_PAGE = 5,
+    SCREEN_ID_DEVELOPER_PAGE = 6,
+    SCREEN_ID_FISH_PAGE = 7,
+    SCREEN_ID_RESET_PAGE = 8,
 };
 
 void create_screen_main_page();
@@ -64,10 +62,6 @@ void create_screen_control_page();
 void delete_screen_control_page();
 void tick_screen_control_page();
 
-void create_screen_test_page();
-void delete_screen_test_page();
-void tick_screen_test_page();
-
 void create_screen_about_page();
 void delete_screen_about_page();
 void tick_screen_about_page();
@@ -75,10 +69,6 @@ void tick_screen_about_page();
 void create_screen_calendar_page();
 void delete_screen_calendar_page();
 void tick_screen_calendar_page();
-
-void create_screen_chart_page();
-void delete_screen_chart_page();
-void tick_screen_chart_page();
 
 void create_screen_menu_page();
 void delete_screen_menu_page();

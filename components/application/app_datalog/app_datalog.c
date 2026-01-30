@@ -28,6 +28,10 @@
 #include "app_state.h"
 #include "app_time.h"
 #include "app_sdcard.h"
+#include "app_vibration.h"
+#if CONFIG_JOFTMODE_ENABLE_ML
+#include "app_ml.h"
+#endif
 
 #define TAG "app_datalog"
 
@@ -49,11 +53,32 @@
 #define SAMPLER_TASK_PRIO 7
 #define SAMPLER_INTERVAL_MS 40
 
+#define PRED_TASK_STACK 4096
+#define PRED_TASK_PRIO 5
+#define PRED_LOG_INTERVAL_MS 1000
+
+#define EVENT_TASK_STACK 4096
+#define EVENT_TASK_PRIO 5
+#define EVENT_LOG_INTERVAL_MS 1000
+#define EVENT_SWITCH_CONFIRM 3
+#define SUMMARY_PERIOD_MS 180000
+#define SUMMARY_MODE_COUNT 6
+#define CARBON_FACTOR_STATIONARY 0.0f
+#define CARBON_FACTOR_WALK 0.0f
+#define CARBON_FACTOR_BIKE 1.2f
+#define CARBON_FACTOR_CAR 12.0f
+#define CARBON_FACTOR_BUS 6.5f
+#define CARBON_FACTOR_SUBWAY 4.2f
 
 #define RAW_FLUSH_LINES 50
 #define RAW_FSYNC_FLUSHES 1
 
+#define PRED_FLUSH_LINES 5
+#define PRED_FSYNC_FLUSHES 1
+
 #define LOGGER_IDLE_WAIT_MS 80
+#define LOGGER_BATCH_YIELD 8
+#define LOGGER_YIELD_MS 1
 
 #define FILE_BUF_SIZE 4096
 #define DIR_BUF_SIZE 64
@@ -65,6 +90,8 @@
 static QueueHandle_t s_raw_queue = NULL;
 static TaskHandle_t s_logger_task = NULL;
 static TaskHandle_t s_sampler_task = NULL;
+static TaskHandle_t s_pred_task = NULL;
+static TaskHandle_t s_event_task = NULL;
 static SemaphoreHandle_t s_mount_lock = NULL;
 static SemaphoreHandle_t s_session_lock = NULL;
 static volatile bool s_datalog_enabled = true;
@@ -78,6 +105,22 @@ static char s_raw_name[FILE_NAME_SIZE];
 static uint32_t s_raw_lines_since_flush = 0;
 static uint32_t s_raw_flushes_since_sync = 0;
 static volatile uint32_t s_raw_dropped = 0;
+static FILE *s_pred_file = NULL;
+static char s_pred_file_buf[FILE_BUF_SIZE];
+static char s_pred_dir[DIR_BUF_SIZE];
+static char s_pred_name[FILE_NAME_SIZE];
+static uint32_t s_pred_lines_since_flush = 0;
+static uint32_t s_pred_flushes_since_sync = 0;
+static char s_summary_file_buf[FILE_BUF_SIZE];
+static int s_event_current_mode = -1;
+static int s_event_pending_mode = -1;
+static uint32_t s_event_pending_count = 0;
+static uint64_t s_event_start_uptime_ms = 0;
+static int64_t s_event_start_epoch_ms = 0;
+static float s_event_speed_sum = 0.0f;
+static uint32_t s_event_speed_samples = 0;
+static float s_summary_duration_min[SUMMARY_MODE_COUNT] = {0};
+static float s_summary_co2_g[SUMMARY_MODE_COUNT] = {0};
 static bool s_session_active = false;
 static char s_session_dir[DIR_BUF_SIZE];
 static char s_session_file[FILE_NAME_SIZE];
@@ -91,6 +134,8 @@ static bool s_last_gps_valid = false;
 static bool s_bus_ok = false;
 static bool s_mounted = false;
 static sdmmc_card_t *s_card = NULL;
+static int64_t s_last_mount_attempt_us = 0;
+static int64_t s_last_mount_error_log_us = 0;
 
 static sdmmc_host_t s_host = SDSPI_HOST_DEFAULT();
 static spi_bus_config_t s_buscfg = {
@@ -104,11 +149,12 @@ static spi_bus_config_t s_buscfg = {
 static sdspi_device_config_t s_slotcfg;
 static esp_vfs_fat_sdmmc_mount_config_t s_mountcfg = {
     .format_if_mount_failed = false,
-    .max_files = 5,
+    .max_files = 3,
     .allocation_unit_size = 0
 };
 
 static void datalog_close_raw_file(void);
+static void datalog_close_pred_file(void);
 static bool datalog_ensure_dir(const char *dir);
 static esp_err_t datalog_mount(void);
 
@@ -159,6 +205,9 @@ static bool datalog_remount_locked(void)
 {
     if (s_raw_file) {
         datalog_close_raw_file();
+    }
+    if (s_pred_file) {
+        datalog_close_pred_file();
     }
 
     if (s_mounted && s_card) {
@@ -227,6 +276,50 @@ static void datalog_format_datetime(int64_t epoch_ms, char *out, size_t out_sz)
              tm_info.tm_hour,
              tm_info.tm_min,
              tm_info.tm_sec);
+}
+
+static void datalog_format_time_hms(int64_t epoch_ms, char *out, size_t out_sz)
+{
+    if (!out || out_sz == 0) {
+        return;
+    }
+    if (epoch_ms <= 0) {
+        snprintf(out, out_sz, "NA");
+        return;
+    }
+    time_t sec = (time_t)(epoch_ms / 1000);
+    struct tm tm_info;
+    if (!localtime_r(&sec, &tm_info)) {
+        snprintf(out, out_sz, "NA");
+        return;
+    }
+    snprintf(out, out_sz, "%02d:%02d:%02d", tm_info.tm_hour, tm_info.tm_min, tm_info.tm_sec);
+}
+
+static const char *datalog_mode_label(int mode)
+{
+    switch (mode) {
+        case 0: return "stationary";
+        case 1: return "walk";
+        case 2: return "bike";
+        case 3: return "car";
+        case 4: return "bus";
+        case 5: return "subway";
+        default: return "unknown";
+    }
+}
+
+static float datalog_mode_factor(int mode)
+{
+    switch (mode) {
+        case 0: return CARBON_FACTOR_STATIONARY;
+        case 1: return CARBON_FACTOR_WALK;
+        case 2: return CARBON_FACTOR_BIKE;
+        case 3: return CARBON_FACTOR_CAR;
+        case 4: return CARBON_FACTOR_BUS;
+        case 5: return CARBON_FACTOR_SUBWAY;
+        default: return 0.0f;
+    }
 }
 
 static void datalog_format_float(char *out, size_t out_sz, float value)
@@ -382,6 +475,32 @@ static bool datalog_build_raw_paths(const DatalogRaw_t *raw,
     return false;
 }
 
+static bool datalog_build_pred_paths(const DatalogPred_t *pred,
+                                     char *dir, size_t dir_sz,
+                                     char *file, size_t file_sz)
+{
+    if (pred && pred->datetime_local_ms > 0) {
+        time_t sec = (time_t)(pred->datetime_local_ms / 1000);
+        struct tm tm_info;
+        if (localtime_r(&sec, &tm_info)) {
+            snprintf(dir, dir_sz, MOUNT_POINT "/%04d%02d%02d",
+                     tm_info.tm_year + 1900,
+                     tm_info.tm_mon + 1,
+                     tm_info.tm_mday);
+            snprintf(file, file_sz, "pred_%02d.csv", tm_info.tm_hour);
+            return true;
+        }
+    }
+
+    uint32_t hour = 0;
+    if (pred) {
+        hour = (uint32_t)((pred->uptime_ms / 3600000ULL) % 24ULL);
+    }
+    snprintf(dir, dir_sz, MOUNT_POINT "/%s", UNSYNCED_DIR);
+    snprintf(file, file_sz, "pred_unsynced_%02" PRIu32 ".csv", hour);
+    return false;
+}
+
 static bool datalog_build_daily_dir(char *dir, size_t dir_sz)
 {
     if (app_time_is_valid()) {
@@ -458,7 +577,11 @@ static esp_err_t datalog_mount(void)
             s_mounted = true;
             ESP_LOGI(TAG, "SD mounted at %s", MOUNT_POINT);
         } else {
-            ESP_LOGW(TAG, "mount failed: %s", esp_err_to_name(err));
+            int64_t now_us = esp_timer_get_time();
+            if (now_us - s_last_mount_error_log_us > 5000000LL) {
+                ESP_LOGW(TAG, "mount failed: %s", esp_err_to_name(err));
+                s_last_mount_error_log_us = now_us;
+            }
             return err;
         }
     }
@@ -471,6 +594,11 @@ static bool datalog_ensure_mounted(void)
     if (s_mounted) {
         return true;
     }
+    int64_t now_us = esp_timer_get_time();
+    if (s_last_mount_attempt_us != 0 && (now_us - s_last_mount_attempt_us < 5000000LL)) {
+        return false;
+    }
+    s_last_mount_attempt_us = now_us;
     datalog_lock();
     if (s_mounted) {
         datalog_unlock();
@@ -535,6 +663,59 @@ static bool datalog_open_raw_file(const char *dir, const char *file)
     return true;
 }
 
+static bool datalog_open_pred_file(const char *dir, const char *file)
+{
+    if (!datalog_ensure_dir_with_remount(dir)) {
+        return false;
+    }
+
+    char path[PATH_BUF_SIZE];
+    snprintf(path, sizeof(path), "%s/%s", dir, file);
+
+    bool need_header = true;
+    struct stat st;
+    if (stat(path, &st) == 0 && st.st_size > 0) {
+        need_header = false;
+    }
+
+    FILE *f = fopen(path, "a");
+    if (!f && errno == EIO) {
+        ESP_LOGW(TAG, "pred fopen io error, remounting");
+        if (datalog_remount_locked()) {
+            f = fopen(path, "a");
+        }
+    }
+    if (!f) {
+        ESP_LOGE(TAG, "pred fopen failed: %s errno=%d (%s)", path, errno, strerror(errno));
+        return false;
+    }
+
+    if (setvbuf(f, s_pred_file_buf, _IOFBF, sizeof(s_pred_file_buf)) != 0) {
+        ESP_LOGW(TAG, "pred setvbuf failed, continue unbuffered");
+    }
+
+    if (need_header) {
+        const char *header =
+            "datetime_local,uptime_ms,pred_raw,pred_smooth,confidence,gps_valid\r\n";
+        if (fprintf(f, "%s", header) < 0) {
+            ESP_LOGE(TAG, "pred header write failed errno=%d (%s)", errno, strerror(errno));
+            fclose(f);
+            return false;
+        }
+        fflush(f);
+        (void)fsync(fileno(f));
+    }
+
+    s_pred_file = f;
+    datalog_copy_token(s_pred_dir, sizeof(s_pred_dir), dir);
+    datalog_copy_token(s_pred_name, sizeof(s_pred_name), file);
+    s_pred_lines_since_flush = 0;
+    s_pred_flushes_since_sync = 0;
+
+    ESP_LOGI(TAG, "pred open %s/%s", dir, file);
+    return true;
+}
+
 static bool datalog_rotate_raw_if_needed(const char *dir, const char *file)
 {
     if (s_raw_file && strcmp(dir, s_raw_dir) == 0 && strcmp(file, s_raw_name) == 0) {
@@ -547,6 +728,20 @@ static bool datalog_rotate_raw_if_needed(const char *dir, const char *file)
     }
 
     return datalog_open_raw_file(dir, file);
+}
+
+static bool datalog_rotate_pred_if_needed(const char *dir, const char *file)
+{
+    if (s_pred_file && strcmp(dir, s_pred_dir) == 0 && strcmp(file, s_pred_name) == 0) {
+        return true;
+    }
+
+    if (s_pred_file) {
+        fclose(s_pred_file);
+        s_pred_file = NULL;
+    }
+
+    return datalog_open_pred_file(dir, file);
 }
 
 static bool datalog_emit_raw_line(const DatalogRaw_t *raw)
@@ -591,6 +786,33 @@ static bool datalog_emit_raw_line(const DatalogRaw_t *raw)
     return true;
 }
 
+static bool datalog_emit_pred_line(const DatalogPred_t *pred)
+{
+    if (!s_pred_file || !pred) {
+        return false;
+    }
+
+    char datetime[DATETIME_BUF_SIZE];
+    datalog_format_datetime(pred->datetime_local_ms, datetime, sizeof(datetime));
+
+    char conf[FLOAT_BUF_SIZE];
+    datalog_format_float(conf, sizeof(conf), pred->confidence);
+
+    int rc = fprintf(s_pred_file,
+                     "%s,%llu,%d,%d,%s,%u\r\n",
+                     datetime,
+                     (unsigned long long)pred->uptime_ms,
+                     pred->pred_raw,
+                     pred->pred_smooth,
+                     conf,
+                     (unsigned int)pred->gps_valid);
+
+    if (rc < 0 || ferror(s_pred_file)) {
+        return false;
+    }
+    return true;
+}
+
 static void datalog_raw_flush(bool force_sync)
 {
     if (!s_raw_file || s_raw_lines_since_flush == 0) {
@@ -607,6 +829,22 @@ static void datalog_raw_flush(bool force_sync)
     s_raw_lines_since_flush = 0;
 }
 
+static void datalog_pred_flush(bool force_sync)
+{
+    if (!s_pred_file || s_pred_lines_since_flush == 0) {
+        return;
+    }
+    if (fflush(s_pred_file) == 0) {
+        if (force_sync || ++s_pred_flushes_since_sync >= PRED_FSYNC_FLUSHES) {
+            s_pred_flushes_since_sync = 0;
+            (void)fsync(fileno(s_pred_file));
+        }
+    } else {
+        ESP_LOGW(TAG, "pred flush failed errno=%d (%s)", errno, strerror(errno));
+    }
+    s_pred_lines_since_flush = 0;
+}
+
 static void datalog_close_raw_file(void)
 {
     if (!s_raw_file) {
@@ -616,6 +854,17 @@ static void datalog_close_raw_file(void)
     (void)fsync(fileno(s_raw_file));
     fclose(s_raw_file);
     s_raw_file = NULL;
+}
+
+static void datalog_close_pred_file(void)
+{
+    if (!s_pred_file) {
+        return;
+    }
+    fflush(s_pred_file);
+    (void)fsync(fileno(s_pred_file));
+    fclose(s_pred_file);
+    s_pred_file = NULL;
 }
 
 static void datalog_write_raw(const DatalogRaw_t *raw)
@@ -706,6 +955,7 @@ static void datalog_logger_task(void *arg)
     (void)arg;
     DatalogRaw_t raw;
     int64_t last_mount_log_us = 0;
+    uint32_t batch = 0;
 
     while (1) {
         if (xQueueReceive(s_raw_queue, &raw, portMAX_DELAY) != pdTRUE) {
@@ -715,6 +965,7 @@ static void datalog_logger_task(void *arg)
         if (!s_datalog_enabled) {
             if (app_sdcard_lock_fs(pdMS_TO_TICKS(1000))) {
                 datalog_close_raw_file();
+                datalog_close_pred_file();
                 app_sdcard_unlock_fs();
             }
             if (s_datalog_stop_requested) {
@@ -743,6 +994,10 @@ static void datalog_logger_task(void *arg)
                     s_raw_dropped++;
                 }
             }
+            if (++batch >= LOGGER_BATCH_YIELD) {
+                batch = 0;
+                vTaskDelay(pdMS_TO_TICKS(LOGGER_YIELD_MS));
+            }
         } while (xQueueReceive(s_raw_queue, &raw, pdMS_TO_TICKS(LOGGER_IDLE_WAIT_MS)) == pdTRUE);
 
         if (app_sdcard_lock_fs(portMAX_DELAY)) {
@@ -768,6 +1023,218 @@ static void datalog_sampler_task(void *arg)
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(SAMPLER_INTERVAL_MS));
     }
 }
+
+#if CONFIG_JOFTMODE_ENABLE_ML
+static void pred_logger_task(void *arg)
+{
+    (void)arg;
+    ESP_LOGI(TAG, "pred logger start");
+    TickType_t last_wake = xTaskGetTickCount();
+    uint64_t last_logged_ms = 0;
+
+    while (1) {
+        if (s_datalog_enabled) {
+            app_ml_status_t st;
+            if (app_ml_get_latest_status(&st)) {
+                if (st.uptime_ms != 0 && st.uptime_ms != last_logged_ms) {
+                    DatalogPred_t pred = {
+                        .datetime_local_ms = st.datetime_local_ms,
+                        .uptime_ms = st.uptime_ms,
+                        .pred_raw = st.pred_raw,
+                        .pred_smooth = st.pred_smooth,
+                        .confidence = st.confidence,
+                        .gps_valid = st.gps_valid
+                    };
+                    (void)app_datalog_log_pred(&pred);
+                    last_logged_ms = st.uptime_ms;
+                }
+            }
+        }
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(PRED_LOG_INTERVAL_MS));
+    }
+}
+#endif
+
+#if CONFIG_JOFTMODE_ENABLE_ML
+static void datalog_update_summary(int mode, float duration_sec)
+{
+    if (duration_sec <= 0.0f) {
+        return;
+    }
+    if (mode < 0 || mode >= SUMMARY_MODE_COUNT) {
+        return;
+    }
+    float duration_min = duration_sec / 60.0f;
+    s_summary_duration_min[mode] += duration_min;
+    s_summary_co2_g[mode] += duration_min * datalog_mode_factor(mode);
+}
+
+static void datalog_write_summary_snapshot(uint64_t now_ms)
+{
+    float duration_min[SUMMARY_MODE_COUNT];
+    float co2_g[SUMMARY_MODE_COUNT];
+    for (int i = 0; i < SUMMARY_MODE_COUNT; ++i) {
+        duration_min[i] = s_summary_duration_min[i];
+        co2_g[i] = s_summary_co2_g[i];
+    }
+
+    if (s_event_current_mode >= 0 && s_event_current_mode < SUMMARY_MODE_COUNT &&
+        s_event_start_uptime_ms > 0 && now_ms > s_event_start_uptime_ms) {
+        float add_min = (float)((now_ms - s_event_start_uptime_ms) / 1000.0 / 60.0);
+        duration_min[s_event_current_mode] += add_min;
+        co2_g[s_event_current_mode] += add_min * datalog_mode_factor(s_event_current_mode);
+    }
+
+    DatalogSummary_t rows[SUMMARY_MODE_COUNT];
+    for (int i = 0; i < SUMMARY_MODE_COUNT; ++i) {
+        memset(&rows[i], 0, sizeof(rows[i]));
+        datalog_copy_token(rows[i].mode, sizeof(rows[i].mode), datalog_mode_label(i));
+        rows[i].total_duration_min = duration_min[i];
+        rows[i].carbon_factor_g_per_min = datalog_mode_factor(i);
+        rows[i].co2_g = co2_g[i];
+    }
+    (void)app_datalog_save_summary_batch(rows, SUMMARY_MODE_COUNT);
+}
+
+static void datalog_ensure_events_file(void)
+{
+    if (!app_sdcard_lock_fs(pdMS_TO_TICKS(2000))) {
+        ESP_LOGW(TAG, "event header skipped: sd fs busy");
+        return;
+    }
+    if (!datalog_ensure_mounted()) {
+        app_sdcard_unlock_fs();
+        return;
+    }
+
+    char dir[DIR_BUF_SIZE];
+    (void)datalog_build_daily_dir(dir, sizeof(dir));
+    if (!datalog_ensure_dir(dir)) {
+        app_sdcard_unlock_fs();
+        return;
+    }
+
+    char path[PATH_BUF_SIZE];
+    snprintf(path, sizeof(path), "%s/events.csv", dir);
+
+    struct stat st;
+    if (stat(path, &st) == 0 && st.st_size > 0) {
+        app_sdcard_unlock_fs();
+        return;
+    }
+
+    FILE *f = fopen(path, "a");
+    if (!f) {
+        app_sdcard_unlock_fs();
+        return;
+    }
+
+    const char *header = "start_time,end_time,start_uptime_ms,end_uptime_ms,duration_s,mode,avg_speed_mps\r\n";
+    (void)fprintf(f, "%s", header);
+    fflush(f);
+    (void)fsync(fileno(f));
+    fclose(f);
+    app_sdcard_unlock_fs();
+}
+
+static void event_logger_task(void *arg)
+{
+    (void)arg;
+    ESP_LOGI(TAG, "event logger start");
+    TickType_t last_wake = xTaskGetTickCount();
+    uint64_t last_summary_ms = 0;
+    bool events_ready = false;
+
+    while (1) {
+        if (s_datalog_enabled) {
+            app_ml_status_t st;
+            if (app_ml_get_latest_status(&st) && st.uptime_ms != 0) {
+                if (!events_ready) {
+                    datalog_ensure_events_file();
+                    events_ready = true;
+                }
+                int mode = st.pred_smooth;
+                if (mode >= 0 && mode < SUMMARY_MODE_COUNT) {
+                    GNSS_Data gps;
+                    bool gps_valid = false;
+                    float speed = 0.0f;
+                    if (app_state_get_latest_gps(&gps) && gps.is_valid == 1) {
+                        gps_valid = true;
+                        speed = gps.speed;
+                    }
+
+                    if (s_event_current_mode < 0) {
+                        s_event_current_mode = mode;
+                        s_event_start_uptime_ms = st.uptime_ms;
+                        s_event_start_epoch_ms = st.datetime_local_ms;
+                        s_event_speed_sum = 0.0f;
+                        s_event_speed_samples = 0;
+                        s_event_pending_mode = -1;
+                        s_event_pending_count = 0;
+                    }
+
+                    if (mode == s_event_current_mode) {
+                        s_event_pending_mode = -1;
+                        s_event_pending_count = 0;
+                    } else {
+                        if (mode != s_event_pending_mode) {
+                            s_event_pending_mode = mode;
+                            s_event_pending_count = 1;
+                        } else {
+                            s_event_pending_count++;
+                        }
+
+                        if (s_event_pending_count >= EVENT_SWITCH_CONFIRM) {
+                            DatalogEvent_t ev;
+                            memset(&ev, 0, sizeof(ev));
+                            datalog_format_time_hms(s_event_start_epoch_ms, ev.start_time, sizeof(ev.start_time));
+                            datalog_format_time_hms(st.datetime_local_ms, ev.end_time, sizeof(ev.end_time));
+                            ev.start_uptime_ms = (int64_t)s_event_start_uptime_ms;
+                            ev.end_uptime_ms = (int64_t)st.uptime_ms;
+                            ev.duration_sec = (float)((st.uptime_ms - s_event_start_uptime_ms) / 1000.0);
+                            datalog_copy_token(ev.mode, sizeof(ev.mode), datalog_mode_label(s_event_current_mode));
+                            if (s_event_speed_samples > 0) {
+                                ev.avg_speed_mps = s_event_speed_sum / (float)s_event_speed_samples;
+                            } else {
+                                ev.avg_speed_mps = NAN;
+                            }
+                            app_datalog_log_event(&ev);
+                            datalog_update_summary(s_event_current_mode, ev.duration_sec);
+                            datalog_write_summary_snapshot(st.uptime_ms);
+
+                            if (mode == 3 || mode == 4 || mode == 5) {
+                                app_vibration_pulse_ms(120);
+                            }
+
+                            s_event_current_mode = mode;
+                            s_event_start_uptime_ms = st.uptime_ms;
+                            s_event_start_epoch_ms = st.datetime_local_ms;
+                            s_event_speed_sum = 0.0f;
+                            s_event_speed_samples = 0;
+                            s_event_pending_mode = -1;
+                            s_event_pending_count = 0;
+                        }
+                    }
+
+                    if (gps_valid) {
+                        s_event_speed_sum += speed;
+                        s_event_speed_samples++;
+                    }
+
+                    if (last_summary_ms == 0) {
+                        last_summary_ms = st.uptime_ms;
+                    } else if (st.uptime_ms - last_summary_ms >= SUMMARY_PERIOD_MS) {
+                        datalog_write_summary_snapshot(st.uptime_ms);
+                        last_summary_ms = st.uptime_ms;
+                    }
+                }
+            }
+        }
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(EVENT_LOG_INTERVAL_MS));
+    }
+}
+#endif
+
 
 
 esp_err_t app_datalog_start(void)
@@ -795,6 +1262,17 @@ esp_err_t app_datalog_start(void)
         ESP_LOGE(TAG, "sampler task create failed");
         return ESP_ERR_NO_MEM;
     }
+
+#if CONFIG_JOFTMODE_ENABLE_ML
+    if (xTaskCreate(pred_logger_task, "pred_logger", PRED_TASK_STACK, NULL,
+                    PRED_TASK_PRIO, &s_pred_task) != pdPASS) {
+        ESP_LOGW(TAG, "pred logger task create failed");
+    }
+    if (xTaskCreate(event_logger_task, "event_logger", EVENT_TASK_STACK, NULL,
+                    EVENT_TASK_PRIO, &s_event_task) != pdPASS) {
+        ESP_LOGW(TAG, "event logger task create failed");
+    }
+#endif
 
     (void)datalog_ensure_mounted();
     started = true;
@@ -900,6 +1378,10 @@ void app_datalog_stop(void)
 {
     s_datalog_enabled = false;
     s_datalog_stop_requested = true;
+    if (app_sdcard_lock_fs(pdMS_TO_TICKS(1000))) {
+        datalog_close_pred_file();
+        app_sdcard_unlock_fs();
+    }
     if (s_raw_queue) {
         DatalogRaw_t dummy = {0};
         (void)xQueueSend(s_raw_queue, &dummy, 0);
@@ -1021,6 +1503,55 @@ void app_datalog_log_event(const DatalogEvent_t *event)
     ESP_LOGI(TAG, "event logged %s", path);
 }
 
+esp_err_t app_datalog_log_pred(const DatalogPred_t *pred)
+{
+    if (!pred) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_datalog_enabled) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!app_sdcard_lock_fs(pdMS_TO_TICKS(1000))) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if (!datalog_ensure_mounted()) {
+        app_sdcard_unlock_fs();
+        return ESP_FAIL;
+    }
+
+    char dir[DIR_BUF_SIZE];
+    char file[FILE_NAME_SIZE];
+    (void)datalog_build_pred_paths(pred, dir, sizeof(dir), file, sizeof(file));
+
+    if (!datalog_rotate_pred_if_needed(dir, file)) {
+        app_sdcard_unlock_fs();
+        return ESP_FAIL;
+    }
+
+    if (!datalog_emit_pred_line(pred)) {
+        int e = errno;
+        ESP_LOGW(TAG, "pred write failed errno=%d (%s) retry", e, strerror(e));
+        clearerr(s_pred_file);
+        fclose(s_pred_file);
+        s_pred_file = NULL;
+        if (!datalog_open_pred_file(dir, file)) {
+            app_sdcard_unlock_fs();
+            return ESP_FAIL;
+        }
+        if (!datalog_emit_pred_line(pred)) {
+            app_sdcard_unlock_fs();
+            return ESP_FAIL;
+        }
+    }
+
+    if (++s_pred_lines_since_flush >= PRED_FLUSH_LINES) {
+        datalog_pred_flush(false);
+    }
+
+    app_sdcard_unlock_fs();
+    return ESP_OK;
+}
+
 void app_datalog_save_summary(const DatalogSummary_t *summary)
 {
     if (!summary) {
@@ -1063,8 +1594,7 @@ esp_err_t app_datalog_save_summary_batch(const DatalogSummary_t *rows, size_t co
         return ESP_FAIL;
     }
 
-    char buf[FILE_BUF_SIZE];
-    if (setvbuf(f, buf, _IOFBF, sizeof(buf)) != 0) {
+    if (setvbuf(f, s_summary_file_buf, _IOFBF, sizeof(s_summary_file_buf)) != 0) {
         ESP_LOGW(TAG, "summary setvbuf failed");
     }
 
@@ -1094,14 +1624,24 @@ esp_err_t app_datalog_save_summary_batch(const DatalogSummary_t *rows, size_t co
         total_co2 += rows[i].co2_g;
     }
 
-    fprintf(f, "TOTAL,%.2f,0.00,%.2f\r\n", total_duration_min, total_co2);
+    fprintf(f, "TOTAL,%.2f,,%.2f\r\n", total_duration_min, total_co2);
 
     fflush(f);
     (void)fsync(fileno(f));
     fclose(f);
 
     if (rename(tmp_path, path) != 0) {
-        ESP_LOGE(TAG, "summary rename failed: %s errno=%d (%s)", path, errno, strerror(errno));
+        int e = errno;
+        if (e == EEXIST) {
+            (void)unlink(path);
+            if (rename(tmp_path, path) == 0) {
+                ESP_LOGI(TAG, "summary saved %s", path);
+                app_sdcard_unlock_fs();
+                return ESP_OK;
+            }
+            e = errno;
+        }
+        ESP_LOGE(TAG, "summary rename failed: %s errno=%d (%s)", path, e, strerror(e));
         app_sdcard_unlock_fs();
         return ESP_FAIL;
     }

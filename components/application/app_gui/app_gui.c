@@ -9,6 +9,8 @@
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_timer.h"
+#include "esp_memory_utils.h"
+#include "esp_heap_caps.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -20,6 +22,12 @@
 
 #include "app_touch.h"
 #include "app_power.h"
+#include "app_antenna.h"
+#include "actions.h"
+#include "sdkconfig.h"
+#if CONFIG_JOFTMODE_ENABLE_ML
+#include "app_ml.h"
+#endif
 
 void app_gui_set_flow_var_int(int32_t var_id, int32_t value);
 void app_gui_set_flow_var_string(int32_t var_id, const char *value);
@@ -32,9 +40,18 @@ static esp_lcd_panel_handle_t s_panel_handle = NULL;   //屏幕句柄，用于�
 static bool s_screen_on = true;  //屏幕状�?
 static lv_indev_t *s_touch_indev = NULL; //LVGL 输入设备
 static int32_t s_last_brightness = -1;
+static lv_draw_buf_t s_draw_buf1;
+static lv_draw_buf_t s_draw_buf2;
+static void *s_draw_buf1_mem = NULL;
+static void *s_draw_buf2_mem = NULL;
+static uint8_t *s_dma_bounce = NULL;
+static size_t s_dma_bounce_size = 0;
 // Set to 1 to run display_hal_test_once() during startup (useful for panel bring-up).
 #define APP_GUI_RUN_DISPLAY_TEST_ONCE 0
 #define APP_GUI_DEFAULT_BRIGHTNESS 100  // 1-100
+#define APP_GUI_USE_FULL_FB 1
+#define APP_GUI_REQUIRE_PSRAM 1
+#define APP_GUI_DMA_BOUNCE_LINES 8
 
 #if 0
 
@@ -72,6 +89,24 @@ static void update_time_vars(void)
     }
 }
 
+#if CONFIG_JOFTMODE_ENABLE_ML
+static void update_mode_var(void)
+{
+    static uint64_t last_uptime_ms = 0;
+    app_ml_status_t st;
+    if (!app_ml_get_latest_status(&st)) {
+        return;
+    }
+    if (st.uptime_ms == 0 || st.uptime_ms == last_uptime_ms) {
+        return;
+    }
+    last_uptime_ms = st.uptime_ms;
+
+    int32_t mode_value = (st.pred_smooth >= 0) ? st.pred_smooth : -1;
+    app_gui_set_flow_var_int(FLOW_GLOBAL_VARIABLE_MODE_LVGL, mode_value);
+}
+#endif
+
 /* ---------- LVGL tick（v9 要求“返回毫秒”） ---------- */
 static uint32_t lv_tick_cb(void)  //告诉 LVGL “现在的毫秒数”，LVGL 用它处理动画/定时�?
 {
@@ -83,14 +118,85 @@ static uint32_t lv_tick_cb(void)  //告诉 LVGL “现在的毫秒数”，LVGL 
 //使用 trans_done �?te_sema 做同步，避免撕裂或传输冲突�?
 static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
 {
+    const int w = area->x2 - area->x1 + 1;
+    const int h = area->y2 - area->y1 + 1;
+    if (w <= 0 || h <= 0) {
+        lv_display_flush_ready(disp);
+        return;
+    }
+
+    if (!px_map || !area) {
+        lv_display_flush_ready(disp);
+        return;
+    }
+
+    const size_t src_stride = LV_DRAW_BUF_STRIDE(s_hal.hor_res, LV_COLOR_FORMAT_RGB888);
+    const uint8_t *base = px_map;
+    if (APP_GUI_USE_FULL_FB) {
+        base = px_map + (size_t)area->y1 * src_stride + (size_t)area->x1 * 3U;
+    }
+
+    if (!esp_ptr_dma_capable(base)) {
+        const size_t dst_stride = (size_t)w * 3U;
+        const size_t chunk_bytes = dst_stride * APP_GUI_DMA_BOUNCE_LINES;
+        if (!s_dma_bounce || s_dma_bounce_size < chunk_bytes) {
+            if (s_dma_bounce) {
+                heap_caps_free(s_dma_bounce);
+                s_dma_bounce = NULL;
+                s_dma_bounce_size = 0;
+            }
+            s_dma_bounce = (uint8_t*)heap_caps_malloc(chunk_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+            if (s_dma_bounce) {
+                s_dma_bounce_size = chunk_bytes;
+            }
+        }
+        if (!s_dma_bounce) {
+            ESP_LOGE(TAG, "DMA bounce alloc failed, size=%u", (unsigned)chunk_bytes);
+            lv_display_flush_ready(disp);
+            return;
+        }
+
+        int y = 0;
+        while (y < h) {
+            const int lines = (h - y) > APP_GUI_DMA_BOUNCE_LINES ? APP_GUI_DMA_BOUNCE_LINES : (h - y);
+            uint8_t *dst = s_dma_bounce;
+            const uint8_t *src = base + (size_t)y * src_stride;
+            for (int i = 0; i < lines; ++i) {
+                memcpy(dst + (size_t)i * dst_stride, src + (size_t)i * src_stride, dst_stride);
+            }
+
+            if (s_hal.trans_done) (void)xSemaphoreTake(s_hal.trans_done, 0);
+            if (s_hal.te_sema) (void)xSemaphoreTake(s_hal.te_sema, pdMS_TO_TICKS(5));
+
+            esp_err_t e = esp_lcd_panel_draw_bitmap(
+                s_hal.panel,
+                area->x1, area->y1 + y,
+                area->x2 + 1, area->y1 + y + lines,
+                s_dma_bounce
+            );
+
+            if (e == ESP_OK && s_hal.trans_done) {
+                (void)xSemaphoreTake(s_hal.trans_done, portMAX_DELAY);
+            } else if (e != ESP_OK) {
+                ESP_LOGE(TAG, "draw_bitmap failed: %d", (int)e);
+                break;
+            }
+
+            y += lines;
+        }
+
+        lv_display_flush_ready(disp);
+        return;
+    }
+
     if (s_hal.trans_done) (void)xSemaphoreTake(s_hal.trans_done, 0);
     if (s_hal.te_sema) (void)xSemaphoreTake(s_hal.te_sema, pdMS_TO_TICKS(5));
 
     esp_err_t e = esp_lcd_panel_draw_bitmap(
         s_hal.panel,
         area->x1, area->y1,
-        area->x2 + 1, area->y2 + 1,     //  +1（右下角开区间
-        px_map                          //  RGB888�?B/像素，试过rgb5xx会乱码
+        area->x2 + 1, area->y2 + 1,
+        base
     );
 
     if (e == ESP_OK && s_hal.trans_done) {
@@ -217,14 +323,56 @@ static void gui_task(void *arg)
     lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB888);
 
     // 4) 配置行缓冲（格式也用 RGB888）（24 行的 line buffer�?
-    const uint32_t line_cnt = 24;   // 24 行缓冲，带宽与内存的折中
-    lv_draw_buf_t *dbuf1 = lv_draw_buf_create(
-        s_hal.hor_res, line_cnt, LV_COLOR_FORMAT_RGB888, 0
-    );
-    lv_draw_buf_t *dbuf2 = lv_draw_buf_create(
-        s_hal.hor_res, line_cnt, LV_COLOR_FORMAT_RGB888, 0
-    );
-    lv_display_set_draw_buffers(disp, dbuf1, dbuf2);
+    const uint32_t line_cnt = 12;   // reduce buffer to save RAM
+    const uint32_t buf_height = APP_GUI_USE_FULL_FB ? s_hal.ver_res : line_cnt;
+    const uint32_t buf_size = LV_DRAW_BUF_SIZE(s_hal.hor_res, buf_height, LV_COLOR_FORMAT_RGB888);
+    if (!s_draw_buf1_mem) {
+        s_draw_buf1_mem = heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    if (!s_draw_buf2_mem) {
+        s_draw_buf2_mem = heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+#if !APP_GUI_REQUIRE_PSRAM
+    if (!s_draw_buf1_mem || !s_draw_buf2_mem) {
+        if (!s_draw_buf1_mem) {
+            s_draw_buf1_mem = heap_caps_malloc(buf_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        }
+        if (!s_draw_buf2_mem) {
+            s_draw_buf2_mem = heap_caps_malloc(buf_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        }
+    }
+#endif
+    if (!s_draw_buf1_mem || !s_draw_buf2_mem) {
+        if (s_draw_buf1_mem) {
+            heap_caps_free(s_draw_buf1_mem);
+            s_draw_buf1_mem = NULL;
+        }
+        if (s_draw_buf2_mem) {
+            heap_caps_free(s_draw_buf2_mem);
+            s_draw_buf2_mem = NULL;
+        }
+        ESP_LOGE(TAG, "LVGL draw buffer alloc failed, size=%u", (unsigned)buf_size);
+        vTaskDelete(NULL);
+        return;
+    }
+    if (lv_draw_buf_init(&s_draw_buf1, s_hal.hor_res, buf_height, LV_COLOR_FORMAT_RGB888,
+                         LV_STRIDE_AUTO, s_draw_buf1_mem, buf_size) != LV_RESULT_OK) {
+        ESP_LOGE(TAG, "LVGL draw buf1 init failed");
+        vTaskDelete(NULL);
+        return;
+    }
+    if (lv_draw_buf_init(&s_draw_buf2, s_hal.hor_res, buf_height, LV_COLOR_FORMAT_RGB888,
+                         LV_STRIDE_AUTO, s_draw_buf2_mem, buf_size) != LV_RESULT_OK) {
+        ESP_LOGE(TAG, "LVGL draw buf2 init failed");
+        vTaskDelete(NULL);
+        return;
+    }
+    lv_draw_buf_set_flag(&s_draw_buf1, LV_IMAGE_FLAGS_MODIFIABLE);
+    lv_draw_buf_set_flag(&s_draw_buf2, LV_IMAGE_FLAGS_MODIFIABLE);
+    lv_display_set_draw_buffers(disp, &s_draw_buf1, &s_draw_buf2);
+    if (APP_GUI_USE_FULL_FB) {
+        lv_display_set_render_mode(disp, LV_DISPLAY_RENDER_MODE_DIRECT);
+    }
 
     // 5) 刷新回调，设flush 回调 flush_cb()
     lv_display_set_flush_cb(disp, flush_cb);
@@ -303,6 +451,10 @@ static void gui_task(void *arg)
     while (1) {
         lv_timer_handler();
         update_time_vars();
+#if CONFIG_JOFTMODE_ENABLE_ML
+        update_mode_var();
+#endif
+        ui_set_wifi_toggle(app_antenna_is_wifi_enabled());
         ui_tick();
         {
             int32_t brightness = app_gui_get_flow_var_int(

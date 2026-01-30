@@ -21,6 +21,7 @@ void app_antenna_set_wifi_enabled(bool enabled);
 void app_antenna_set_ble_enabled(bool enabled);
 bool app_antenna_is_wifi_enabled(void);
 bool app_antenna_is_ble_enabled(void);
+void app_antenna_time_sync_request(uint32_t timeout_ms);
 
 void app_antenna_sntp_set_enabled(bool enabled);
 bool app_antenna_sntp_is_enabled(void);

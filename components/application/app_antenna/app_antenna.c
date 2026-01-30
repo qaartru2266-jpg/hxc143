@@ -12,10 +12,12 @@
 #include "esp_netif.h"
 #include "esp_netif_sntp.h"
 #include "esp_wifi.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 
 #include "app_antenna.h"
 #include "app_time.h"
+#include "app_vibration.h"
 
 #if defined(CONFIG_BT_ENABLED) && CONFIG_BT_ENABLED
 #define APP_ANTENNA_ENABLE_BLE 1
@@ -31,11 +33,13 @@
 #endif
 
 #define WIFI_SCAN_INTERVAL_MS 30000
+#define WIFI_SCAN_TASK_STACK 6144
 #define WIFI_SSID "rxwhyjz01"
 #define WIFI_PASS "123456785"
 #define SNTP_SERVER "ntp.aliyun.com"
 #define BLE_DEVICE_NAME "shanruishanrui"
 #define TIME_VALID_EPOCH 1700000000
+#define TIME_SYNC_TIMEOUT_MS 30000
 
 static const char *TAG = "app_antenna";
 
@@ -58,6 +62,10 @@ static TaskHandle_t s_sntp_monitor_task = NULL;
 static bool s_time_valid = false;
 static app_antenna_time_source_t s_time_source = APP_ANTENNA_TIME_SOURCE_NONE;
 static uint16_t s_last_scan_count = 0;
+static TaskHandle_t s_time_sync_task = NULL;
+static volatile bool s_time_sync_active = false;
+static volatile bool s_time_sync_done = false;
+static int64_t s_time_sync_deadline_us = 0;
 
 static TaskHandle_t s_wifi_task = NULL;
 static bool s_netif_inited = false;
@@ -181,7 +189,8 @@ static void wifi_scan_once(void)
 
     for (uint16_t i = 0; i < ap_count; ++i) {
         const wifi_ap_record_t *ap = &ap_records[i];
-        ESP_LOGI(TAG, "SSID: %s, RSSI: %d dBm", (const char *)ap->ssid, ap->rssi);
+        ESP_LOGI(TAG, "SSID: %.*s, RSSI: %d dBm",
+                 (int)sizeof(ap->ssid), (const char *)ap->ssid, ap->rssi);
     }
 
     free(ap_records);
@@ -238,18 +247,30 @@ static void ble_gap_event_handler(esp_gap_ble_cb_event_t event,
 }
 #endif
 
-static void wifi_init(void)
+static esp_err_t wifi_init(void)
 {
     if (s_wifi_inited) {
-        return;
+        return ESP_OK;
     }
 
     netif_init_once();
     s_wifi_netif = esp_netif_create_default_wifi_sta();
+    if (!s_wifi_netif) {
+        ESP_LOGE(TAG, "wifi netif create failed");
+        return ESP_ERR_NO_MEM;
+    }
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    esp_err_t err = esp_wifi_init(&cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_init failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    err = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_mode failed: %s", esp_err_to_name(err));
+        return err;
+    }
 
     wifi_config_t wifi_config = {0};
     strncpy((char *)wifi_config.sta.ssid, WIFI_SSID, sizeof(wifi_config.sta.ssid));
@@ -259,16 +280,29 @@ static void wifi_init(void)
     wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
     wifi_config.sta.pmf_cfg.capable = true;
     wifi_config.sta.pmf_cfg.required = false;
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    err = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_config failed: %s", esp_err_to_name(err));
+        return err;
+    }
 
     if (!s_wifi_event_registered) {
-        ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
-                                                   &wifi_event_handler, NULL));
-        ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
-                                                   &wifi_event_handler, NULL));
+        err = esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
+                                         &wifi_event_handler, NULL);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGE(TAG, "wifi event register failed: %s", esp_err_to_name(err));
+            return err;
+        }
+        err = esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+                                         &wifi_event_handler, NULL);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGE(TAG, "ip event register failed: %s", esp_err_to_name(err));
+            return err;
+        }
         s_wifi_event_registered = true;
     }
     s_wifi_inited = true;
+    return ESP_OK;
 }
 
 #if APP_ANTENNA_ENABLE_BLE
@@ -352,7 +386,36 @@ static void sntp_time_sync_cb(struct timeval *tv)
         app_time_set_unix(tv->tv_sec, APP_TIME_SOURCE_SNTP);
     }
     app_time_save_now();
+    app_vibration_pulse_ms(120);
+    if (s_time_sync_active) {
+        s_time_sync_done = true;
+    }
     ESP_LOGI(TAG, "SNTP time synced: %lld", tv ? (long long)tv->tv_sec : -1LL);
+}
+
+static void time_sync_task(void *arg)
+{
+    (void)arg;
+    while (s_time_sync_active) {
+        int64_t now_us = esp_timer_get_time();
+        if (s_time_sync_done) {
+            ESP_LOGI(TAG, "time sync done, wifi off");
+            s_time_sync_active = false;
+            s_time_sync_done = false;
+            app_antenna_set_wifi_enabled(false);
+            break;
+        }
+        if (s_time_sync_deadline_us > 0 && now_us >= s_time_sync_deadline_us) {
+            ESP_LOGW(TAG, "time sync timeout, wifi off");
+            s_time_sync_active = false;
+            s_time_sync_done = false;
+            app_antenna_set_wifi_enabled(false);
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    s_time_sync_task = NULL;
+    vTaskDelete(NULL);
 }
 
 static void sntp_monitor_task(void *arg)
@@ -399,17 +462,33 @@ void app_antenna_set_wifi_enabled(bool enabled)
     }
 
     if (enabled) {
-        wifi_init();
+        esp_err_t err = wifi_init();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Wi-Fi init failed: %s", esp_err_to_name(err));
+            s_wifi_enabled = false;
+            return;
+        }
         if (!s_wifi_started) {
-            ESP_ERROR_CHECK(esp_wifi_start());
+            err = esp_wifi_start();
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Wi-Fi start failed: %s", esp_err_to_name(err));
+                s_wifi_enabled = false;
+                return;
+            }
             s_wifi_started = true;
         }
         s_wifi_enabled = true;
         s_wifi_connecting = true;
-        esp_wifi_connect();
+        err = esp_wifi_connect();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Wi-Fi connect failed: %s", esp_err_to_name(err));
+        }
 
         if (!s_wifi_task) {
-            xTaskCreate(wifi_scan_task, "app_antenna_wifi", 4096, NULL, 5, &s_wifi_task);
+            if (xTaskCreate(wifi_scan_task, "app_antenna_wifi", WIFI_SCAN_TASK_STACK, NULL, 5, &s_wifi_task) != pdPASS) {
+                ESP_LOGW(TAG, "Wi-Fi scan task create failed");
+                s_wifi_task = NULL;
+            }
         }
     } else {
         s_wifi_enabled = false;
@@ -424,6 +503,25 @@ void app_antenna_set_wifi_enabled(bool enabled)
             }
             s_wifi_started = false;
         }
+    }
+}
+
+void app_antenna_time_sync_request(uint32_t timeout_ms)
+{
+    if (timeout_ms == 0) {
+        timeout_ms = TIME_SYNC_TIMEOUT_MS;
+    }
+    s_time_sync_active = true;
+    s_time_sync_done = false;
+    s_time_sync_deadline_us = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
+
+    app_antenna_set_wifi_enabled(true);
+    if (s_wifi_connected) {
+        app_antenna_sntp_set_enabled(true);
+    }
+
+    if (!s_time_sync_task) {
+        xTaskCreate(time_sync_task, "app_time_sync", 3072, NULL, 5, &s_time_sync_task);
     }
 }
 

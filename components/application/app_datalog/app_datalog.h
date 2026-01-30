@@ -44,11 +44,21 @@ typedef struct {
     float co2_g;
 } DatalogSummary_t;
 
+typedef struct {
+    int64_t datetime_local_ms;
+    uint64_t uptime_ms;
+    int pred_raw;
+    int pred_smooth;
+    float confidence;
+    uint8_t gps_valid;
+} DatalogPred_t;
+
 esp_err_t app_datalog_start(void);
 void app_datalog_enqueue_raw(const DatalogRaw_t *raw_data);
 void app_datalog_log_event(const DatalogEvent_t *event);
 void app_datalog_save_summary(const DatalogSummary_t *summary);
 esp_err_t app_datalog_save_summary_batch(const DatalogSummary_t *rows, size_t count);
+esp_err_t app_datalog_log_pred(const DatalogPred_t *pred);
 esp_err_t app_datalog_start_session(const char *label);
 void app_datalog_stop_session(void);
 void app_datalog_set_default_raw_enabled(bool enable);

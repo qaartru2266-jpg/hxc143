@@ -6,6 +6,7 @@ idf_component_register(
         "app_sdcard/app_sdcard.c"
         "app_datalog/app_datalog.c"
         "app_logic/app_logic.c"
+        "app_ml_task.cc"
         "app_control/app_control.c"
         "app_quiet/app_quiet.c"
         "app_imu_calib/app_imu_calib.c"

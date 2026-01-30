@@ -190,7 +190,7 @@ static esp_err_t csv_open_create_header(void)
     const char *header =
         "date,timestamp,timestamp_ms,latitude,longitude,speed_mps,course_deg,"
         "acc_x,acc_y,acc_z,gyro_x,gyro_y,gyro_z,"
-        "ml_pred,ml_p_walk,ml_p_ebike\r\n";
+        "ml_pred,ml_confidence\r\n";
 
     if (fprintf(s_csv, "%s", header) <= 0) {
         int e = errno;
@@ -276,15 +276,18 @@ static void append_csv_row(const app_state_imu_sample_t *imu_sample, bool use_gp
     ml_result_t r;
     bool have_ml = ml_get_latest_result(&r);
     if (have_ml) {
-        const char *label = (r.pred == 0) ? "walk" : "ebike";
-        fprintf(s_csv, ",%s,%.3f,%.3f\r\n", label, r.p_walk, r.p_ebike);
+        float conf = 0.0f;
+        if (r.pred >= 0 && r.pred < ML_MAX_CLASSES) {
+            conf = r.probs[r.pred];
+        }
+        fprintf(s_csv, ",%d,%.3f\r\n", r.pred, conf);
         s_last_ml = r;
         s_last_ml_valid = true;
     } else {
-        fprintf(s_csv, ",,,\r\n");
+        fprintf(s_csv, ",,\r\n");
     }
 #else
-    fprintf(s_csv, ",,,\r\n");
+    fprintf(s_csv, ",,\r\n");
 #endif
 
     if (++s_lines_since_flush >= FLUSH_EVERY_LINES) {
