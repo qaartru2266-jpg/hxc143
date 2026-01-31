@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include <sys/time.h>
+#include <stdint.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -17,7 +18,6 @@
 
 #include "app_antenna.h"
 #include "app_time.h"
-#include "app_vibration.h"
 
 #if defined(CONFIG_BT_ENABLED) && CONFIG_BT_ENABLED
 #define APP_ANTENNA_ENABLE_BLE 1
@@ -42,6 +42,8 @@
 #define TIME_SYNC_TIMEOUT_MS 30000
 
 static const char *TAG = "app_antenna";
+
+extern void app_vibration_pulse_ms(uint32_t on_ms) __attribute__((weak));
 
 static volatile bool s_wifi_enabled = false;
 static volatile bool s_ble_enabled = false;
@@ -386,7 +388,9 @@ static void sntp_time_sync_cb(struct timeval *tv)
         app_time_set_unix(tv->tv_sec, APP_TIME_SOURCE_SNTP);
     }
     app_time_save_now();
-    app_vibration_pulse_ms(120);
+    if (app_vibration_pulse_ms) {
+        app_vibration_pulse_ms(120);
+    }
     if (s_time_sync_active) {
         s_time_sync_done = true;
     }

@@ -98,3 +98,13 @@ idf.py -p PORT flash
 - 在 `components/application/app_power/app_power.c` 中恢复轻睡眠逻辑（power_task 调用 `esp_light_sleep_start()` 并配置唤醒源）。
 - 使用 UART 或其它非 USB 日志；轻睡眠时 USB CDC 会断开。
 - 进入睡眠前确保 KEY/TOUCH 线保持高电平，避免立即唤醒。
+
+## 近期变更摘要
+- 启用 PSRAM 并将 TFLM Tensor Arena 放入 PSRAM，同时让 Wi‑Fi 和 LWIP 优先使用 PSRAM
+- 新增 ML 周期任务与滑窗推理，pred 1Hz 写入，UI 直接显示 pred_smooth 数值
+- SD 写入闭环完善，raw、pred、events、summary 文件生成，summary TOTAL 行仅保留总时长与总排放
+- LVGL 全屏双缓冲与 DMA bounce 优化，触摸唤醒去抖
+- 修复多次崩溃与写卡问题，修复 summary 栈溢出与 Wi‑Fi SSID 打印越界
+- 删除 mock 测试逻辑，统一六类模式 Stationary Walk Bike Car Bus Subway
+- Wi‑Fi 校时改为开机与按钮触发，30 秒超时自动关闭，并同步 UI 开关状态
+- 震动仅在 Wi‑Fi 校时成功及切换到 Car Bus Subway 时触发

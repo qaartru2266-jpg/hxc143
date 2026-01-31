@@ -124,6 +124,11 @@ static void parse_GGA(gps_parser_t *parser, const char *sentence)
             case 5:
                 if (token[0]) lon_hemi = token[0];
                 break;
+            case 6:
+                if (token[0]) {
+                    parser->data.is_valid = (atoi(token) > 0) ? 1 : 0;
+                }
+                break;
             case 7:
                 parser->data.satellite_count = token[0] ? atoi(token) : 0;
                 break;

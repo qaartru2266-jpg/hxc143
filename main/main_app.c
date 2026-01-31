@@ -7,7 +7,7 @@
 #include "app_datalog.h"
 
 #define DEV_STOP_ALL_ON_BOOT 0
-#define DEV_DISABLE_DEFAULT_RAW_ON_BOOT 0
+#define DEV_DISABLE_DEFAULT_RAW_ON_BOOT 1
 #define DEV_ENABLE_WIFI_ON_BOOT 1
 
 #if DEV_STOP_ALL_ON_BOOT
@@ -48,6 +48,9 @@ void app_main(void)
     app_power_start();
     app_bat_adc_start();
 
+    if (DEV_DISABLE_DEFAULT_RAW_ON_BOOT) {
+        app_datalog_set_ml_enabled(false);
+    }
     app_datalog_start();
     printf("MODE: DATA_COLLECTION (MOCK disabled)\n");
 #if DEV_DISABLE_DEFAULT_RAW_ON_BOOT
@@ -69,9 +72,13 @@ void app_main(void)
 #endif
 
 #if CONFIG_JOFTMODE_ENABLE_ML
-    app_ml_init();
-    // Force-link ML task implementation and start it (safe if already started).
-    app_ml_task_start();
+    if (DEV_DISABLE_DEFAULT_RAW_ON_BOOT) {
+        ESP_LOGI("app_main", "ML disabled on boot");
+    } else {
+        app_ml_init();
+        // Force-link ML task implementation and start it (safe if already started).
+        app_ml_task_start();
+    }
 #endif
 
     app_gui_start();

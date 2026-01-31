@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdbool.h>
 #include "esp_log.h"
 #include "math.h"
 
@@ -27,10 +28,15 @@ static const char * TAG = "axis6";
 #define LSM6DS3_STATUS_GDA  0x02
 
 static uint8_t s_imu_addr = LSM6DS3_ADDR_LOW;
+static bool s_i2c_initialized = false;
 
 
 esp_err_t i2c_master_init(void)
 {
+    if (s_i2c_initialized) {
+        return ESP_OK;
+    }
+
     int i2c_master_port = 0;
 
     i2c_config_t conf = {
@@ -53,6 +59,10 @@ esp_err_t i2c_master_init(void)
         err = ESP_OK;
     } else if (err != ESP_OK) {
         ESP_LOGE(TAG, "i2c_driver_install failed: 0x%x", err);
+    }
+
+    if (err == ESP_OK) {
+        s_i2c_initialized = true;
     }
 
     return err;

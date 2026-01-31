@@ -3,6 +3,7 @@
 #include "ml_window.h"
 
 #include <math.h>
+#include <string.h>
 #include <sys/time.h>
 
 #include "app_state.h"
@@ -21,6 +22,7 @@ static const char* TAG = "app_ml_task";
 #define ML_SMOOTH_WIN 5
 #define ML_SWITCH_CONFIRM 3
 #define ML_INPUT_LEN (25 * 6 * 8)
+#define GPS_HOLD_MS 1000
 
 static TaskHandle_t s_ml_task = NULL;
 static float s_input_buf[ML_INPUT_LEN];
@@ -108,6 +110,11 @@ static void ml_task(void *arg)
     float last_course = 0.0f;
     uint64_t last_course_ms = 0;
     bool have_course = false;
+    float last_speed = 0.0f;
+    float last_turn_rate = 0.0f;
+    uint64_t last_gps_valid_ms = 0;
+    uint64_t last_gps_update_ms = 0;
+    char last_gps_time[sizeof(((GNSS_Data *)0)->timestamp)] = {0};
 
     while (1) {
         app_state_imu_sample_t imu;
@@ -117,30 +124,63 @@ static void ml_task(void *arg)
 
                 GNSS_Data gps;
                 bool have_gps = app_state_get_latest_gps(&gps);
-                bool gps_valid = have_gps && (gps.is_valid == 1);
-                float speed = gps_valid ? gps.speed : 0.0f;
-                float turn_rate = 0.0f;
                 uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000ULL);
 
-                if (gps_valid) {
+                bool gps_valid_raw = have_gps && (gps.is_valid == 1);
+                bool gps_time_changed = false;
+                if (gps_valid_raw && gps.timestamp[0]) {
+                    if (strncmp(gps.timestamp, last_gps_time, sizeof(last_gps_time)) != 0) {
+                        strncpy(last_gps_time, gps.timestamp, sizeof(last_gps_time) - 1);
+                        last_gps_time[sizeof(last_gps_time) - 1] = '\0';
+                        gps_time_changed = true;
+                    }
+                }
+
+                bool gps_update = false;
+                if (gps_valid_raw) {
+                    if (gps_time_changed) {
+                        gps_update = true;
+                    } else if (last_gps_update_ms == 0 ||
+                               (now_ms - last_gps_update_ms) >= GPS_HOLD_MS) {
+                        gps_update = true;
+                    }
+                }
+
+                if (gps_update) {
                     if (have_course) {
                         float delta = gps.course - last_course;
-                        if (delta > 180.0f) delta -= 360.0f;
-                        if (delta < -180.0f) delta += 360.0f;
+                        if (delta > 180.0f) {
+                            delta -= 360.0f;
+                        } else if (delta < -180.0f) {
+                            delta += 360.0f;
+                        }
                         float dt = (now_ms - last_course_ms) / 1000.0f;
                         if (dt > 0.05f) {
-                            turn_rate = delta / dt;
+                            last_turn_rate = delta / dt;
+                        } else {
+                            last_turn_rate = 0.0f;
                         }
+                    } else {
+                        last_turn_rate = 0.0f;
                     }
                     last_course = gps.course;
                     last_course_ms = now_ms;
                     have_course = true;
+                    last_speed = gps.speed;
+                    last_gps_valid_ms = now_ms;
+                    last_gps_update_ms = now_ms;
                 }
+
+                bool gps_valid_hold = (last_gps_valid_ms != 0 &&
+                                       (now_ms - last_gps_valid_ms) <= GPS_HOLD_MS);
+                bool gps_valid_for_ml = gps_valid_hold;
+                float speed = gps_valid_for_ml ? last_speed : 0.0f;
+                float turn_rate = gps_valid_for_ml ? last_turn_rate : 0.0f;
 
                 ml_window_push_sample_raw(
                     imu.acc_x, imu.acc_y, imu.acc_z,
                     imu.gyr_x, imu.gyr_y, imu.gyr_z,
-                    gps_valid, speed, turn_rate
+                    gps_valid_for_ml, speed, turn_rate
                 );
 
                 samples_since_infer++;

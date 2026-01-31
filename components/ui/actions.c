@@ -49,11 +49,14 @@ static void update_datalog_state(const char *preferred_label)
         lv_obj_has_state(objects.walk_data_get, LV_STATE_CHECKED);
     bool stationary_on = objects.stationary_data_get &&
         lv_obj_has_state(objects.stationary_data_get, LV_STATE_CHECKED);
-    // developer_page: obj0=bike, obj1=car, obj2=bus, obj3=subway
-    bool bike_on = objects.obj0 && lv_obj_has_state(objects.obj0, LV_STATE_CHECKED);
-    bool car_on = objects.obj1 && lv_obj_has_state(objects.obj1, LV_STATE_CHECKED);
-    bool bus_on = objects.obj2 && lv_obj_has_state(objects.obj2, LV_STATE_CHECKED);
-    bool subway_on = objects.obj3 && lv_obj_has_state(objects.obj3, LV_STATE_CHECKED);
+    bool bike_on = objects.bike_data_get &&
+        lv_obj_has_state(objects.bike_data_get, LV_STATE_CHECKED);
+    bool car_on = objects.car_data_get &&
+        lv_obj_has_state(objects.car_data_get, LV_STATE_CHECKED);
+    bool bus_on = objects.bus_data_get &&
+        lv_obj_has_state(objects.bus_data_get, LV_STATE_CHECKED);
+    bool subway_on = objects.subway_data_get &&
+        lv_obj_has_state(objects.subway_data_get, LV_STATE_CHECKED);
 
     if (walk_on || stationary_on || bike_on || car_on || bus_on || subway_on) {
         const char *label = NULL;

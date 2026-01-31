@@ -57,7 +57,7 @@ static void event_handler_cb_control_page_control_page(lv_event_t *e) {
     }
 }
 
-static void event_handler_cb_control_page_obj6(lv_event_t *e) {
+static void event_handler_cb_control_page_obj2(lv_event_t *e) {
     lv_event_code_t event = lv_event_get_code(e);
     void *flowState = lv_event_get_user_data(e);
     (void)flowState;
@@ -148,7 +148,7 @@ static void event_handler_cb_developer_page_stationary_data_get(lv_event_t *e) {
     }
 }
 
-static void event_handler_cb_developer_page_obj1(lv_event_t *e) {
+static void event_handler_cb_developer_page_bike_data_get(lv_event_t *e) {
     lv_event_code_t event = lv_event_get_code(e);
     void *flowState = lv_event_get_user_data(e);
     (void)flowState;
@@ -159,7 +159,7 @@ static void event_handler_cb_developer_page_obj1(lv_event_t *e) {
     }
 }
 
-static void event_handler_cb_developer_page_obj2(lv_event_t *e) {
+static void event_handler_cb_developer_page_car_data_get(lv_event_t *e) {
     lv_event_code_t event = lv_event_get_code(e);
     void *flowState = lv_event_get_user_data(e);
     (void)flowState;
@@ -170,7 +170,7 @@ static void event_handler_cb_developer_page_obj2(lv_event_t *e) {
     }
 }
 
-static void event_handler_cb_developer_page_obj3(lv_event_t *e) {
+static void event_handler_cb_developer_page_bus_data_get(lv_event_t *e) {
     lv_event_code_t event = lv_event_get_code(e);
     void *flowState = lv_event_get_user_data(e);
     (void)flowState;
@@ -181,7 +181,7 @@ static void event_handler_cb_developer_page_obj3(lv_event_t *e) {
     }
 }
 
-static void event_handler_cb_developer_page_obj4(lv_event_t *e) {
+static void event_handler_cb_developer_page_subway_data_get(lv_event_t *e) {
     lv_event_code_t event = lv_event_get_code(e);
     void *flowState = lv_event_get_user_data(e);
     (void)flowState;
@@ -319,7 +319,7 @@ void create_screen_main_page() {
         }
         {
             lv_obj_t *obj = lv_label_create(parent_obj);
-            objects.obj5 = obj;
+            objects.obj1 = obj;
             lv_obj_set_pos(obj, 316, 231);
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
             lv_label_set_text(obj, "");
@@ -356,7 +356,7 @@ void delete_screen_main_page() {
     objects.current_date = 0;
     objects.test = 0;
     objects.label_battery = 0;
-    objects.obj5 = 0;
+    objects.obj1 = 0;
     objects.test_1 = 0;
     deletePageFlowState(0);
 }
@@ -402,10 +402,10 @@ void tick_screen_main_page() {
     }
     {
         const char *new_val = evalTextProperty(flowState, 8, 3, "Failed to evaluate Text in Label widget");
-        const char *cur_val = lv_label_get_text(objects.obj5);
+        const char *cur_val = lv_label_get_text(objects.obj1);
         if (strcmp(new_val, cur_val) != 0) {
-            tick_value_change_obj = objects.obj5;
-            lv_label_set_text(objects.obj5, new_val);
+            tick_value_change_obj = objects.obj1;
+            lv_label_set_text(objects.obj1, new_val);
             tick_value_change_obj = NULL;
         }
     }
@@ -424,11 +424,11 @@ void create_screen_control_page() {
         lv_obj_t *parent_obj = obj;
         {
             lv_obj_t *obj = lv_slider_create(parent_obj);
-            objects.obj6 = obj;
+            objects.obj2 = obj;
             lv_obj_set_pos(obj, 83, 287);
             lv_obj_set_size(obj, 300, 35);
             lv_slider_set_range(obj, 1, 100);
-            lv_obj_add_event_cb(obj, event_handler_cb_control_page_obj6, LV_EVENT_ALL, flowState);
+            lv_obj_add_event_cb(obj, event_handler_cb_control_page_obj2, LV_EVENT_ALL, flowState);
             lv_obj_set_style_bg_color(obj, lv_color_hex(0xff66bb6a), LV_PART_INDICATOR | LV_STATE_DEFAULT);
             lv_obj_set_style_bg_color(obj, lv_color_hex(0xffffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_bg_color(obj, lv_color_hex(0xff286632), LV_PART_KNOB | LV_STATE_DEFAULT);
@@ -451,7 +451,7 @@ void create_screen_control_page() {
 void delete_screen_control_page() {
     lv_obj_delete(objects.control_page);
     objects.control_page = 0;
-    objects.obj6 = 0;
+    objects.obj2 = 0;
     objects.wifi = 0;
     deletePageFlowState(1);
 }
@@ -461,10 +461,10 @@ void tick_screen_control_page() {
     (void)flowState;
     {
         int32_t new_val = evalIntegerProperty(flowState, 0, 3, "Failed to evaluate Value in Slider widget");
-        int32_t cur_val = lv_slider_get_value(objects.obj6);
+        int32_t cur_val = lv_slider_get_value(objects.obj2);
         if (new_val != cur_val) {
-            tick_value_change_obj = objects.obj6;
-            lv_slider_set_value(objects.obj6, new_val, LV_ANIM_OFF);
+            tick_value_change_obj = objects.obj2;
+            lv_slider_set_value(objects.obj2, new_val, LV_ANIM_OFF);
             tick_value_change_obj = NULL;
         }
     }
@@ -482,7 +482,7 @@ void create_screen_about_page() {
         lv_obj_t *parent_obj = obj;
         {
             lv_obj_t *obj = lv_qrcode_create(parent_obj);
-            objects.obj7 = obj;
+            objects.obj3 = obj;
             lv_obj_set_pos(obj, 154, 138);
             lv_obj_set_size(obj, 160, 160);
             lv_qrcode_set_size(obj, 160);
@@ -526,7 +526,7 @@ void create_screen_about_page() {
 void delete_screen_about_page() {
     lv_obj_delete(objects.about_page);
     objects.about_page = 0;
-    objects.obj7 = 0;
+    objects.obj3 = 0;
     objects.back_main = 0;
     objects.obj0 = 0;
     deletePageFlowState(2);
@@ -549,7 +549,7 @@ void create_screen_calendar_page() {
         lv_obj_t *parent_obj = obj;
         {
             lv_obj_t *obj = lv_calendar_create(parent_obj);
-            objects.obj8 = obj;
+            objects.obj4 = obj;
             lv_obj_set_pos(obj, 58, 66);
             lv_obj_set_size(obj, 350, 350);
             lv_calendar_header_arrow_create(obj);
@@ -567,7 +567,7 @@ void create_screen_calendar_page() {
 void delete_screen_calendar_page() {
     lv_obj_delete(objects.calendar_page);
     objects.calendar_page = 0;
-    objects.obj8 = 0;
+    objects.obj4 = 0;
     deletePageFlowState(3);
 }
 
@@ -645,11 +645,12 @@ void create_screen_developer_page() {
             lv_label_set_text(obj, "bike");
         }
         {
+            // bike_data_get
             lv_obj_t *obj = lv_switch_create(parent_obj);
-            objects.obj1 = obj;
+            objects.bike_data_get = obj;
             lv_obj_set_pos(obj, 290, 154);
             lv_obj_set_size(obj, 130, 65);
-            lv_obj_add_event_cb(obj, event_handler_cb_developer_page_obj1, LV_EVENT_ALL, flowState);
+            lv_obj_add_event_cb(obj, event_handler_cb_developer_page_bike_data_get, LV_EVENT_ALL, flowState);
         }
         {
             lv_obj_t *obj = lv_label_create(parent_obj);
@@ -658,18 +659,20 @@ void create_screen_developer_page() {
             lv_label_set_text(obj, "car");
         }
         {
+            // car_data_get
             lv_obj_t *obj = lv_switch_create(parent_obj);
-            objects.obj2 = obj;
+            objects.car_data_get = obj;
             lv_obj_set_pos(obj, 61, 263);
             lv_obj_set_size(obj, 130, 65);
-            lv_obj_add_event_cb(obj, event_handler_cb_developer_page_obj2, LV_EVENT_ALL, flowState);
+            lv_obj_add_event_cb(obj, event_handler_cb_developer_page_car_data_get, LV_EVENT_ALL, flowState);
         }
         {
+            // bus_data_get
             lv_obj_t *obj = lv_switch_create(parent_obj);
-            objects.obj3 = obj;
+            objects.bus_data_get = obj;
             lv_obj_set_pos(obj, 148, 367);
             lv_obj_set_size(obj, 130, 65);
-            lv_obj_add_event_cb(obj, event_handler_cb_developer_page_obj3, LV_EVENT_ALL, flowState);
+            lv_obj_add_event_cb(obj, event_handler_cb_developer_page_bus_data_get, LV_EVENT_ALL, flowState);
         }
         {
             lv_obj_t *obj = lv_label_create(parent_obj);
@@ -684,11 +687,12 @@ void create_screen_developer_page() {
             lv_label_set_text(obj, "subway");
         }
         {
+            // subway_data_get
             lv_obj_t *obj = lv_switch_create(parent_obj);
-            objects.obj4 = obj;
+            objects.subway_data_get = obj;
             lv_obj_set_pos(obj, 284, 265);
             lv_obj_set_size(obj, 130, 65);
-            lv_obj_add_event_cb(obj, event_handler_cb_developer_page_obj4, LV_EVENT_ALL, flowState);
+            lv_obj_add_event_cb(obj, event_handler_cb_developer_page_subway_data_get, LV_EVENT_ALL, flowState);
         }
         {
             // current_time_1
@@ -733,10 +737,10 @@ void delete_screen_developer_page() {
     objects.developer_page = 0;
     objects.walk_data_get = 0;
     objects.stationary_data_get = 0;
-    objects.obj1 = 0;
-    objects.obj2 = 0;
-    objects.obj3 = 0;
-    objects.obj4 = 0;
+    objects.bike_data_get = 0;
+    objects.car_data_get = 0;
+    objects.bus_data_get = 0;
+    objects.subway_data_get = 0;
     objects.current_time_1 = 0;
     objects.current_date_1 = 0;
     deletePageFlowState(5);
@@ -893,7 +897,7 @@ void tick_screen_reset_page() {
 
 
 static const char *screen_names[] = { "main_page", "control_page", "about_page", "calendar_page", "menu_page", "developer_page", "fish_page", "reset_page" };
-static const char *object_names[] = { "main_page", "control_page", "about_page", "calendar_page", "menu_page", "developer_page", "fish_page", "reset_page", "test", "test_1", "wifi", "back_main", "obj0", "walk_data_get", "stationary_data_get", "obj1", "obj2", "obj3", "obj4", "back_main_1", "back_main_2", "current_time", "bar_battery", "current_date", "label_battery", "obj5", "obj6", "obj7", "obj8", "current_time_1", "current_date_1" };
+static const char *object_names[] = { "main_page", "control_page", "about_page", "calendar_page", "menu_page", "developer_page", "fish_page", "reset_page", "test", "test_1", "wifi", "back_main", "obj0", "walk_data_get", "stationary_data_get", "bike_data_get", "car_data_get", "bus_data_get", "subway_data_get", "back_main_1", "back_main_2", "current_time", "bar_battery", "current_date", "label_battery", "obj1", "obj2", "obj3", "obj4", "current_time_1", "current_date_1" };
 
 
 typedef void (*create_screen_func_t)();

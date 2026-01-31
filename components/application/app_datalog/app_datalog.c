@@ -52,6 +52,7 @@
 #define SAMPLER_TASK_STACK 4096
 #define SAMPLER_TASK_PRIO 7
 #define SAMPLER_INTERVAL_MS 40
+#define GPS_HOLD_MS 1000
 
 #define PRED_TASK_STACK 4096
 #define PRED_TASK_PRIO 5
@@ -97,6 +98,7 @@ static SemaphoreHandle_t s_session_lock = NULL;
 static volatile bool s_datalog_enabled = true;
 static volatile bool s_datalog_stop_requested = false;
 static volatile bool s_default_raw_enabled = true;
+static volatile bool s_ml_enabled = true;
 
 static FILE *s_raw_file = NULL;
 static char s_raw_file_buf[FILE_BUF_SIZE];
@@ -130,6 +132,13 @@ static int64_t s_last_imu_ts = -1;
 static bool s_have_gps_cache = false;
 static float s_last_speed = 0.0f;
 static bool s_last_gps_valid = false;
+static float s_last_turn_rate = 0.0f;
+static float s_last_course = 0.0f;
+static uint64_t s_last_course_ms = 0;
+static bool s_have_course = false;
+static uint64_t s_last_gps_valid_ms = 0;
+static uint64_t s_last_gps_update_ms = 0;
+static char s_last_gps_time[sizeof(((GNSS_Data *)0)->timestamp)] = {0};
 
 static bool s_bus_ok = false;
 static bool s_mounted = false;
@@ -931,21 +940,71 @@ static bool datalog_build_raw_sample(DatalogRaw_t *out)
         out->datetime_local_ms = 0;
     }
 
+    uint64_t now_ms = out->uptime_ms;
     GNSS_Data gps;
-    if (app_state_get_latest_gps(&gps)) {
+    bool have_gps = app_state_get_latest_gps(&gps);
+    bool gps_valid_raw = have_gps && (gps.is_valid == 1);
+    bool gps_time_changed = false;
+    if (gps_valid_raw && gps.timestamp[0]) {
+        if (strncmp(gps.timestamp, s_last_gps_time, sizeof(s_last_gps_time)) != 0) {
+            strncpy(s_last_gps_time, gps.timestamp, sizeof(s_last_gps_time) - 1);
+            s_last_gps_time[sizeof(s_last_gps_time) - 1] = '\0';
+            gps_time_changed = true;
+        }
+    }
+
+    bool gps_update = false;
+    if (gps_valid_raw) {
+        if (gps_time_changed) {
+            gps_update = true;
+        } else if (s_last_gps_update_ms == 0 ||
+                   (now_ms - s_last_gps_update_ms) >= GPS_HOLD_MS) {
+            gps_update = true;
+        }
+    }
+
+    if (gps_update) {
+        if (s_have_course) {
+            float delta = gps.course - s_last_course;
+            if (delta > 180.0f) {
+                delta -= 360.0f;
+            } else if (delta < -180.0f) {
+                delta += 360.0f;
+            }
+            float dt = (now_ms - s_last_course_ms) / 1000.0f;
+            if (dt > 0.05f) {
+                s_last_turn_rate = delta / dt;
+            } else {
+                s_last_turn_rate = 0.0f;
+            }
+        } else {
+            s_last_turn_rate = 0.0f;
+        }
+        s_last_course = gps.course;
+        s_last_course_ms = now_ms;
+        s_have_course = true;
         s_last_speed = gps.speed;
-        s_last_gps_valid = (gps.is_valid == 1);
+        s_last_gps_valid_ms = now_ms;
+        s_last_gps_update_ms = now_ms;
+    }
+
+    if (have_gps) {
+        s_last_gps_valid = gps_valid_raw;
         s_have_gps_cache = true;
     }
 
     if (s_have_gps_cache) {
+        bool gps_valid_hold = (s_last_gps_valid_ms != 0 &&
+                               (now_ms - s_last_gps_valid_ms) <= GPS_HOLD_MS);
+        bool gps_valid_out = gps_valid_hold ? true : s_last_gps_valid;
         out->speed_mps = s_last_speed;
-        out->gps_valid = s_last_gps_valid ? 1 : 0;
+        out->gps_valid = gps_valid_out ? 1 : 0;
+        out->turn_rate_deg_s = gps_valid_out ? s_last_turn_rate : 0.0f;
     } else {
         out->speed_mps = NAN;
         out->gps_valid = 0;
+        out->turn_rate_deg_s = 0.0f;
     }
-    out->turn_rate_deg_s = 0.0f;
 
     return true;
 }
@@ -1033,7 +1092,7 @@ static void pred_logger_task(void *arg)
     uint64_t last_logged_ms = 0;
 
     while (1) {
-        if (s_datalog_enabled) {
+        if (s_datalog_enabled && s_ml_enabled) {
             app_ml_status_t st;
             if (app_ml_get_latest_status(&st)) {
                 if (st.uptime_ms != 0 && st.uptime_ms != last_logged_ms) {
@@ -1146,7 +1205,7 @@ static void event_logger_task(void *arg)
     bool events_ready = false;
 
     while (1) {
-        if (s_datalog_enabled) {
+        if (s_datalog_enabled && s_ml_enabled) {
             app_ml_status_t st;
             if (app_ml_get_latest_status(&st) && st.uptime_ms != 0) {
                 if (!events_ready) {
@@ -1264,13 +1323,15 @@ esp_err_t app_datalog_start(void)
     }
 
 #if CONFIG_JOFTMODE_ENABLE_ML
-    if (xTaskCreate(pred_logger_task, "pred_logger", PRED_TASK_STACK, NULL,
-                    PRED_TASK_PRIO, &s_pred_task) != pdPASS) {
-        ESP_LOGW(TAG, "pred logger task create failed");
-    }
-    if (xTaskCreate(event_logger_task, "event_logger", EVENT_TASK_STACK, NULL,
-                    EVENT_TASK_PRIO, &s_event_task) != pdPASS) {
-        ESP_LOGW(TAG, "event logger task create failed");
+    if (s_ml_enabled) {
+        if (xTaskCreate(pred_logger_task, "pred_logger", PRED_TASK_STACK, NULL,
+                        PRED_TASK_PRIO, &s_pred_task) != pdPASS) {
+            ESP_LOGW(TAG, "pred logger task create failed");
+        }
+        if (xTaskCreate(event_logger_task, "event_logger", EVENT_TASK_STACK, NULL,
+                        EVENT_TASK_PRIO, &s_event_task) != pdPASS) {
+            ESP_LOGW(TAG, "event logger task create failed");
+        }
     }
 #endif
 
@@ -1397,6 +1458,11 @@ void app_datalog_resume(void)
 bool app_datalog_is_running(void)
 {
     return s_datalog_enabled;
+}
+
+void app_datalog_set_ml_enabled(bool enable)
+{
+    s_ml_enabled = enable;
 }
 
 void app_datalog_enqueue_raw(const DatalogRaw_t *raw_data)

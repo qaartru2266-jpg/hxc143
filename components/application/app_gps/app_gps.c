@@ -200,12 +200,14 @@ void app_gps_start(void)
 void app_gps_stop(void)
 {
     s_gps_enabled = false;
+    gps_power_set(false);
     ESP_LOGW(TAG, "gps stop requested");
 }
 
 void app_gps_resume(void)
 {
     s_gps_enabled = true;
+    gps_power_set(true);
     ESP_LOGW(TAG, "gps resume");
 }
 

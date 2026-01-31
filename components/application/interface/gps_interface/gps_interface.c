@@ -10,6 +10,7 @@
 
 #define TXD_PIN (GPIO_NUM_10)
 #define RXD_PIN (GPIO_NUM_9)
+#define GNSS_EN_PIN (GPIO_NUM_6)
 
 void gps_init(void)
 {
@@ -26,6 +27,22 @@ void gps_init(void)
     uart_driver_install(UART_NUM_1, GPS_BUF_SIZE * 2, 0, 0, NULL, 0);
     uart_param_config(UART_NUM_1, &uart_config);
     uart_set_pin(UART_NUM_1, TXD_PIN, RXD_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+
+    // GNSS_EN low -> Q2 on -> GNSS3V3 on
+    gpio_config_t io_conf = {
+        .intr_type = GPIO_INTR_DISABLE,
+        .mode = GPIO_MODE_OUTPUT,
+        .pin_bit_mask = 1ULL << GNSS_EN_PIN,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+    };
+    gpio_config(&io_conf);
+    gpio_set_level(GNSS_EN_PIN, 0);
+}
+
+void gps_power_set(bool enable)
+{
+    gpio_set_level(GNSS_EN_PIN, enable ? 0 : 1);
 }
 
 unsigned int GpsSendData(const char* logName, const char* data, const int len)
