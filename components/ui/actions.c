@@ -149,6 +149,11 @@ void action_on_wifi(lv_event_t *e)
     }
 }
 
+void action_chongdian_tishi(lv_event_t *e)
+{
+    (void)e;
+}
+
 void ui_set_wifi_toggle(bool enabled)
 {
     if (!objects.wifi) {

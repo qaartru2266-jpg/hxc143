@@ -67,6 +67,7 @@ void app_datalog_stop(void);
 void app_datalog_resume(void);
 bool app_datalog_is_running(void);
 void app_datalog_set_ml_enabled(bool enable);
+void app_datalog_set_summary_enabled(bool enable);
 
 #ifdef __cplusplus
 }

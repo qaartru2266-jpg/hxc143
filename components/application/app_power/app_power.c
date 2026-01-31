@@ -18,7 +18,7 @@
 #define LONG_PRESS_RESET_MS 5000
 #define SHORT_PRESS_MIN_MS  60
 #define INACTIVITY_TIMEOUT_MS 30000
-#define TOUCH_WAKE_HOLD_MS 120
+#define TOUCH_WAKE_HOLD_MS 100
 
 static const char *TAG = "app_power";
 

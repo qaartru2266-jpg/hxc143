@@ -20,7 +20,10 @@ static const char* TAG = "app_ml_task";
 #define ML_SAMPLE_INTERVAL_MS 40
 #define ML_INFER_EVERY_SAMPLES 25
 #define ML_SMOOTH_WIN 5
-#define ML_SWITCH_CONFIRM 3
+#define ML_VOTE_THRESHOLD 3
+#define ML_UNKNOWN_CLASS 255
+#define ML_CONF_MIN 0.6f
+#define ML_MARGIN_MIN 0.15f
 #define ML_INPUT_LEN (25 * 6 * 8)
 #define GPS_HOLD_MS 1000
 
@@ -45,14 +48,21 @@ static bool ml_get_epoch_ms(int64_t *out_ms)
     return true;
 }
 
-static int smooth_update(int pred_raw)
+static int smooth_update(int pred_raw, float confidence, float margin, bool *is_unknown_out)
 {
     static int recent[ML_SMOOTH_WIN] = {0};
     static size_t idx = 0;
     static size_t count = 0;
-    static int smooth = -1;
-    static int candidate = -1;
-    static int candidate_count = 0;
+    static int smooth = ML_UNKNOWN_CLASS;
+
+    bool is_unknown = (pred_raw < 0 || pred_raw >= ML_MAX_CLASSES ||
+                       confidence < ML_CONF_MIN || margin < ML_MARGIN_MIN);
+    if (is_unknown_out) {
+        *is_unknown_out = is_unknown;
+    }
+    if (is_unknown) {
+        return smooth;
+    }
 
     recent[idx] = pred_raw;
     idx = (idx + 1) % ML_SMOOTH_WIN;
@@ -60,40 +70,19 @@ static int smooth_update(int pred_raw)
         count++;
     }
 
-    int count0 = 0;
-    int count1 = 0;
+    int counts[ML_MAX_CLASSES] = {0};
     for (size_t i = 0; i < count; ++i) {
-        if (recent[i] == 0) {
-            count0++;
-        } else {
-            count1++;
+        int v = recent[i];
+        if (v >= 0 && v < ML_MAX_CLASSES) {
+            counts[v]++;
         }
     }
-    int majority = (count1 > count0) ? 1 : 0;
 
-    if (smooth < 0) {
-        smooth = majority;
-        candidate = majority;
-        candidate_count = 0;
-        return smooth;
-    }
-
-    if (majority == smooth) {
-        candidate = majority;
-        candidate_count = 0;
-        return smooth;
-    }
-
-    if (majority != candidate) {
-        candidate = majority;
-        candidate_count = 1;
-    } else {
-        candidate_count++;
-    }
-
-    if (candidate_count >= ML_SWITCH_CONFIRM) {
-        smooth = candidate;
-        candidate_count = 0;
+    for (int i = 0; i < ML_MAX_CLASSES; ++i) {
+        if (counts[i] >= ML_VOTE_THRESHOLD) {
+            smooth = i;
+            break;
+        }
     }
 
     return smooth;
@@ -196,11 +185,28 @@ static void ml_task(void *arg)
                     app_ml_update_result(&result);
 
                     int pred_raw = result.pred;
-                    int pred_smooth = smooth_update(pred_raw);
                     float conf = 0.0f;
-                    if (result.pred >= 0 && result.pred < ML_MAX_CLASSES) {
-                        conf = result.probs[result.pred];
+                    float margin = 0.0f;
+                    if (pred_raw >= 0 && pred_raw < ML_MAX_CLASSES) {
+                        conf = result.probs[pred_raw];
                     }
+                    float top1 = -1.0f;
+                    float top2 = -1.0f;
+                    for (int i = 0; i < ML_MAX_CLASSES; ++i) {
+                        float v = result.probs[i];
+                        if (v > top1) {
+                            top2 = top1;
+                            top1 = v;
+                        } else if (v > top2) {
+                            top2 = v;
+                        }
+                    }
+                    if (top1 >= 0.0f && top2 >= 0.0f) {
+                        margin = top1 - top2;
+                    }
+
+                    bool is_unknown = false;
+                    int pred_smooth = smooth_update(pred_raw, conf, margin, &is_unknown);
 
                     app_ml_status_t st = {
                         .pred_raw = pred_raw,
@@ -225,8 +231,8 @@ static void ml_task(void *arg)
 
                     int64_t now_us = esp_timer_get_time();
                     if (now_us - last_log_us > 5000000LL) {
-                        ESP_LOGI(TAG, "pred_smooth=%d conf=%.3f gps=%u",
-                                 st.pred_smooth, st.confidence, st.gps_valid);
+                        ESP_LOGI(TAG, "pred_raw=%d pred_smooth=%d conf=%.3f margin=%.3f unknown=%u",
+                                 st.pred_raw, st.pred_smooth, st.confidence, margin, is_unknown ? 1U : 0U);
                         last_log_us = now_us;
                     }
                 }

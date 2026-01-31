@@ -11,16 +11,18 @@ typedef struct _objects_t {
     lv_obj_t *main_page;
     lv_obj_t *control_page;
     lv_obj_t *about_page;
-    lv_obj_t *calendar_page;
     lv_obj_t *menu_page;
     lv_obj_t *developer_page;
     lv_obj_t *fish_page;
     lv_obj_t *reset_page;
-    lv_obj_t *test;
-    lv_obj_t *test_1;
+    lv_obj_t *calendar_page;
+    lv_obj_t *select_page;
+    lv_obj_t *bingshan;
+    lv_obj_t *bingshan_1;
     lv_obj_t *wifi;
     lv_obj_t *back_main;
     lv_obj_t *obj0;
+    lv_obj_t *test;
     lv_obj_t *walk_data_get;
     lv_obj_t *stationary_data_get;
     lv_obj_t *bike_data_get;
@@ -29,16 +31,19 @@ typedef struct _objects_t {
     lv_obj_t *subway_data_get;
     lv_obj_t *back_main_1;
     lv_obj_t *back_main_2;
+    lv_obj_t *obj1;
     lv_obj_t *current_time;
     lv_obj_t *bar_battery;
     lv_obj_t *current_date;
-    lv_obj_t *label_battery;
-    lv_obj_t *obj1;
     lv_obj_t *obj2;
+    lv_obj_t *label_battery;
+    lv_obj_t *qingchongdian;
     lv_obj_t *obj3;
     lv_obj_t *obj4;
+    lv_obj_t *obj5;
     lv_obj_t *current_time_1;
     lv_obj_t *current_date_1;
+    lv_obj_t *obj6;
 } objects_t;
 
 extern objects_t objects;
@@ -47,11 +52,12 @@ enum ScreensEnum {
     SCREEN_ID_MAIN_PAGE = 1,
     SCREEN_ID_CONTROL_PAGE = 2,
     SCREEN_ID_ABOUT_PAGE = 3,
-    SCREEN_ID_CALENDAR_PAGE = 4,
-    SCREEN_ID_MENU_PAGE = 5,
-    SCREEN_ID_DEVELOPER_PAGE = 6,
-    SCREEN_ID_FISH_PAGE = 7,
-    SCREEN_ID_RESET_PAGE = 8,
+    SCREEN_ID_MENU_PAGE = 4,
+    SCREEN_ID_DEVELOPER_PAGE = 5,
+    SCREEN_ID_FISH_PAGE = 6,
+    SCREEN_ID_RESET_PAGE = 7,
+    SCREEN_ID_CALENDAR_PAGE = 8,
+    SCREEN_ID_SELECT_PAGE = 9,
 };
 
 void create_screen_main_page();
@@ -65,10 +71,6 @@ void tick_screen_control_page();
 void create_screen_about_page();
 void delete_screen_about_page();
 void tick_screen_about_page();
-
-void create_screen_calendar_page();
-void delete_screen_calendar_page();
-void tick_screen_calendar_page();
 
 void create_screen_menu_page();
 void delete_screen_menu_page();
@@ -85,6 +87,14 @@ void tick_screen_fish_page();
 void create_screen_reset_page();
 void delete_screen_reset_page();
 void tick_screen_reset_page();
+
+void create_screen_calendar_page();
+void delete_screen_calendar_page();
+void tick_screen_calendar_page();
+
+void create_screen_select_page();
+void delete_screen_select_page();
+void tick_screen_select_page();
 
 void create_screen_by_id(enum ScreensEnum screenId);
 void delete_screen_by_id(enum ScreensEnum screenId);

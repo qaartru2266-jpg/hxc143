@@ -19,6 +19,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include <stdbool.h>
 
 #include "app_touch.h"
 #include "app_power.h"
@@ -28,6 +29,9 @@
 #if CONFIG_JOFTMODE_ENABLE_ML
 #include "app_ml.h"
 #endif
+
+// Declared in components/ui/actions.c; keep local to avoid generator overwriting actions.h.
+void ui_set_wifi_toggle(bool enabled);
 
 void app_gui_set_flow_var_int(int32_t var_id, int32_t value);
 void app_gui_set_flow_var_string(int32_t var_id, const char *value);

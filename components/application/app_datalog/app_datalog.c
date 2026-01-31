@@ -61,8 +61,8 @@
 #define EVENT_TASK_STACK 4096
 #define EVENT_TASK_PRIO 5
 #define EVENT_LOG_INTERVAL_MS 1000
-#define EVENT_SWITCH_CONFIRM 3
-#define SUMMARY_PERIOD_MS 180000
+#define EVENT_SWITCH_CONFIRM 4
+#define SUMMARY_PERIOD_MS 210000
 #define SUMMARY_MODE_COUNT 6
 #define CARBON_FACTOR_STATIONARY 0.0f
 #define CARBON_FACTOR_WALK 0.0f
@@ -99,6 +99,7 @@ static volatile bool s_datalog_enabled = true;
 static volatile bool s_datalog_stop_requested = false;
 static volatile bool s_default_raw_enabled = true;
 static volatile bool s_ml_enabled = true;
+static volatile bool s_summary_write_enabled = true;
 
 static FILE *s_raw_file = NULL;
 static char s_raw_file_buf[FILE_BUF_SIZE];
@@ -1465,6 +1466,11 @@ void app_datalog_set_ml_enabled(bool enable)
     s_ml_enabled = enable;
 }
 
+void app_datalog_set_summary_enabled(bool enable)
+{
+    s_summary_write_enabled = enable;
+}
+
 void app_datalog_enqueue_raw(const DatalogRaw_t *raw_data)
 {
     if (!raw_data || !s_raw_queue || !s_datalog_enabled) {
@@ -1630,6 +1636,9 @@ esp_err_t app_datalog_save_summary_batch(const DatalogSummary_t *rows, size_t co
 {
     if (!rows || count == 0) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_summary_write_enabled) {
+        return ESP_OK;
     }
     if (!app_sdcard_lock_fs(pdMS_TO_TICKS(5000))) {
         ESP_LOGW(TAG, "summary skipped: sd fs busy");

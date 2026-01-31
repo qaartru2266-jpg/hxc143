@@ -1,7 +1,6 @@
 #ifndef EEZ_LVGL_UI_EVENTS_H
 #define EEZ_LVGL_UI_EVENTS_H
 
-#include <stdbool.h>
 #include <lvgl.h>
 
 #ifdef __cplusplus
@@ -15,7 +14,7 @@ extern void action_on_bus_data_get(lv_event_t * e);
 extern void action_on_car_data_get(lv_event_t * e);
 extern void action_on_subway_data_get(lv_event_t * e);
 extern void action_on_wifi(lv_event_t * e);
-extern void ui_set_wifi_toggle(bool enabled);
+extern void action_chongdian_tishi(lv_event_t * e);
 
 
 #ifdef __cplusplus

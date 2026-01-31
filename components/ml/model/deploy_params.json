@@ -1,0 +1,53 @@
+{
+  "label_map_fixed": {
+    "STATIONA": 0,
+    "WALK": 1,
+    "BIKE": 2,
+    "CAR": 3,
+    "BUS": 4,
+    "SUBWAY": 5
+  },
+  "labels_order": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "feature_cols": [
+    "acc_x",
+    "acc_y",
+    "acc_z",
+    "gyro_x",
+    "gyro_y",
+    "gyro_z",
+    "speed_mps",
+    "turn_rate_deg_s"
+  ],
+  "dt_ms": 40,
+  "window_samples": 150,
+  "stride_samples": 25,
+  "acc_detrend_per_window": true,
+  "mu": [
+    4.586163129260967e-07,
+    -2.065248963845079e-06,
+    3.4041377148241736e-06,
+    16.730632781982422,
+    23.021549224853516,
+    18.95466423034668,
+    0.005406135227531195,
+    0.016324346885085106
+  ],
+  "sigma": [
+    1661.5928955078125,
+    1538.77392578125,
+    1262.7208251953125,
+    2457.960205078125,
+    1459.4788818359375,
+    1939.02197265625,
+    0.23185285925865173,
+    8.049543380737305
+  ],
+  "notes": "Device pipeline must match training:\n1) Build features in order: acc(3), gyro(3), speed_mps, turn_rate_deg_s\n2) If gps_valid==0: set speed/turn_rate=0 (gating)\n3) For each window: subtract mean of acc channels (per-window detrend)\n4) Normalize: (x - mu) / sigma\n5) Quantize using model input tensor scale/zero_point to int8\n6) Run int8 model; output is int8 logits -> dequantize if needed, argmax -> pred_raw\n7) Apply smooth/hysteresis and Unknown/Uncertain by confidence threshold.\n"
+}

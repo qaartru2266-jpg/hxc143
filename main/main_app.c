@@ -7,7 +7,7 @@
 #include "app_datalog.h"
 
 #define DEV_STOP_ALL_ON_BOOT 0
-#define DEV_DISABLE_DEFAULT_RAW_ON_BOOT 1
+#define DEV_DISABLE_DEFAULT_RAW_ON_BOOT 0
 #define DEV_ENABLE_WIFI_ON_BOOT 1
 
 #if DEV_STOP_ALL_ON_BOOT
@@ -52,6 +52,7 @@ void app_main(void)
         app_datalog_set_ml_enabled(false);
     }
     app_datalog_start();
+    app_datalog_set_summary_enabled(false);
     printf("MODE: DATA_COLLECTION (MOCK disabled)\n");
 #if DEV_DISABLE_DEFAULT_RAW_ON_BOOT
     app_datalog_set_default_raw_enabled(false);

@@ -10,4 +10,5 @@ idf_component_register(
         "model"
     PRIV_REQUIRES
         esp_psram
+        esp_timer
 )

@@ -1,6 +1,7 @@
 #include "ml_runner.h"
 #include "model_data.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include <inttypes.h>
 #include <math.h>
 #include <string.h>
@@ -286,6 +287,7 @@ bool ml_run_inference(const float *input, size_t input_len, ml_result_t *out)
         out->probs[i] = 0.0f;
     }
 
+    float sum = 0.0f;
     for (size_t i = 0; i < count; ++i) {
         float v = 0.0f;
         if (s_output_type == kTfLiteFloat32) {
@@ -298,18 +300,52 @@ bool ml_run_inference(const float *input, size_t input_len, ml_result_t *out)
             ESP_LOGE(TAG, "unsupported output type %d", (int)s_output_type);
             return false;
         }
-        if (v < 0.0f) v = 0.0f;
+
+        if (v < 0.0f) {
+            v = 0.0f;
+        }
         out->probs[i] = v;
+        sum += v;
+    }
+
+    if (count > 0) {
+        if (sum > 0.0f) {
+            float inv = 1.0f / sum;
+            for (size_t i = 0; i < count; ++i) {
+                out->probs[i] *= inv;
+            }
+            sum = 1.0f;
+        } else {
+            float uniform = 1.0f / (float)count;
+            for (size_t i = 0; i < count; ++i) {
+                out->probs[i] = uniform;
+            }
+            sum = 1.0f;
+        }
     }
 
     int best_idx = 0;
     float best = out->probs[0];
+    float second = 0.0f;
     for (size_t i = 1; i < count; ++i) {
-        if (out->probs[i] > best) {
-            best = out->probs[i];
+        float v = out->probs[i];
+        if (v > best) {
+            second = best;
+            best = v;
             best_idx = (int)i;
+        } else if (v > second) {
+            second = v;
         }
     }
     out->pred = best_idx;
+
+    static int64_t s_last_log_us = 0;
+    int64_t now_us = esp_timer_get_time();
+    if (now_us - s_last_log_us >= 5000000LL) {
+        float margin = best - second;
+        ESP_LOGI(TAG, "pred_raw=%d conf=%.3f margin=%.3f sum=%.3f",
+                 out->pred, best, margin, sum);
+        s_last_log_us = now_us;
+    }
     return true;
 }
