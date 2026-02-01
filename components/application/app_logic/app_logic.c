@@ -40,6 +40,7 @@ static const TrafficMode_t k_summary_modes[] = {
 };
 
 static TrafficStateMachine s_tsm;
+static bool s_logic_enabled = true;
 const char *traffic_mode_to_str(TrafficMode_t mode)
 {
     switch (mode) {
@@ -254,7 +255,17 @@ void app_logic_start(void)
     if (started) {
         return;
     }
+    if (!s_logic_enabled) {
+        ESP_LOGW(TAG, "summary writer=app_datalog (app_logic disabled)");
+        return;
+    }
     started = true;
 
     tsm_init(&s_tsm);
+    ESP_LOGI(TAG, "summary writer=app_logic");
+}
+
+void app_logic_set_enabled(bool enable)
+{
+    s_logic_enabled = enable;
 }

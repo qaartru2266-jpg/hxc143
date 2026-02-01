@@ -19,6 +19,9 @@ static const char* TAG = "app_ml_task";
 #define ML_TASK_PRIO 6
 #define ML_SAMPLE_INTERVAL_MS 40
 #define ML_INFER_EVERY_SAMPLES 25
+#ifndef ML_INFER_PERIOD_MS
+#define ML_INFER_PERIOD_MS 2000
+#endif
 #define ML_SMOOTH_WIN 5
 #define ML_VOTE_THRESHOLD 3
 #define ML_UNKNOWN_CLASS 255
@@ -29,6 +32,17 @@ static const char* TAG = "app_ml_task";
 
 static TaskHandle_t s_ml_task = NULL;
 static float s_input_buf[ML_INPUT_LEN];
+static volatile bool s_infer_enabled = true;
+
+extern "C" void app_ml_set_infer_enabled(bool enable)
+{
+    s_infer_enabled = enable;
+}
+
+extern "C" bool app_ml_is_infer_enabled(void)
+{
+    return s_infer_enabled;
+}
 
 static bool ml_get_epoch_ms(int64_t *out_ms)
 {
@@ -95,6 +109,7 @@ static void ml_task(void *arg)
     int64_t last_imu_ts = -1;
     uint32_t samples_since_infer = 0;
     int64_t last_log_us = 0;
+    uint64_t next_infer_ms = 0;
 
     float last_course = 0.0f;
     uint64_t last_course_ms = 0;
@@ -106,6 +121,7 @@ static void ml_task(void *arg)
     char last_gps_time[sizeof(((GNSS_Data *)0)->timestamp)] = {0};
 
     while (1) {
+        uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000ULL);
         app_state_imu_sample_t imu;
         if (app_state_get_latest_imu(&imu)) {
             if (imu.timestamp_us != last_imu_ts) {
@@ -113,7 +129,6 @@ static void ml_task(void *arg)
 
                 GNSS_Data gps;
                 bool have_gps = app_state_get_latest_gps(&gps);
-                uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000ULL);
 
                 bool gps_valid_raw = have_gps && (gps.is_valid == 1);
                 bool gps_time_changed = false;
@@ -176,64 +191,67 @@ static void ml_task(void *arg)
             }
         }
 
-        if (ml_window_is_ready() && samples_since_infer >= ML_INFER_EVERY_SAMPLES) {
-            samples_since_infer = 0;
-            size_t need = ml_window_required_input_len();
-            if (need <= ML_INPUT_LEN && ml_window_get_input(s_input_buf, need)) {
-                ml_result_t result;
-                if (ml_run_inference(s_input_buf, need, &result)) {
-                    app_ml_update_result(&result);
+        if (s_infer_enabled && ml_window_is_ready() && samples_since_infer >= ML_INFER_EVERY_SAMPLES) {
+            if (now_ms >= next_infer_ms) {
+                samples_since_infer = 0;
+                size_t need = ml_window_required_input_len();
+                if (need <= ML_INPUT_LEN && ml_window_get_input(s_input_buf, need)) {
+                    ml_result_t result;
+                    if (ml_run_inference(s_input_buf, need, &result)) {
+                        app_ml_update_result(&result);
 
-                    int pred_raw = result.pred;
-                    float conf = 0.0f;
-                    float margin = 0.0f;
-                    if (pred_raw >= 0 && pred_raw < ML_MAX_CLASSES) {
-                        conf = result.probs[pred_raw];
-                    }
-                    float top1 = -1.0f;
-                    float top2 = -1.0f;
-                    for (int i = 0; i < ML_MAX_CLASSES; ++i) {
-                        float v = result.probs[i];
-                        if (v > top1) {
-                            top2 = top1;
-                            top1 = v;
-                        } else if (v > top2) {
-                            top2 = v;
+                        int pred_raw = result.pred;
+                        float conf = 0.0f;
+                        float margin = 0.0f;
+                        if (pred_raw >= 0 && pred_raw < ML_MAX_CLASSES) {
+                            conf = result.probs[pred_raw];
                         }
-                    }
-                    if (top1 >= 0.0f && top2 >= 0.0f) {
-                        margin = top1 - top2;
-                    }
+                        float top1 = -1.0f;
+                        float top2 = -1.0f;
+                        for (int i = 0; i < ML_MAX_CLASSES; ++i) {
+                            float v = result.probs[i];
+                            if (v > top1) {
+                                top2 = top1;
+                                top1 = v;
+                            } else if (v > top2) {
+                                top2 = v;
+                            }
+                        }
+                        if (top1 >= 0.0f && top2 >= 0.0f) {
+                            margin = top1 - top2;
+                        }
 
-                    bool is_unknown = false;
-                    int pred_smooth = smooth_update(pred_raw, conf, margin, &is_unknown);
+                        bool is_unknown = false;
+                        int pred_smooth = smooth_update(pred_raw, conf, margin, &is_unknown);
 
-                    app_ml_status_t st = {
-                        .pred_raw = pred_raw,
-                        .pred_smooth = pred_smooth,
-                        .confidence = conf,
-                        .gps_valid = 0,
-                        .datetime_local_ms = 0,
-                        .uptime_ms = (uint64_t)(esp_timer_get_time() / 1000ULL)
-                    };
+                        app_ml_status_t st = {
+                            .pred_raw = pred_raw,
+                            .pred_smooth = pred_smooth,
+                            .confidence = conf,
+                            .gps_valid = 0,
+                            .datetime_local_ms = 0,
+                            .uptime_ms = (uint64_t)(esp_timer_get_time() / 1000ULL)
+                        };
 
-                    int64_t epoch_ms = 0;
-                    if (ml_get_epoch_ms(&epoch_ms)) {
-                        st.datetime_local_ms = epoch_ms;
-                    }
+                        int64_t epoch_ms = 0;
+                        if (ml_get_epoch_ms(&epoch_ms)) {
+                            st.datetime_local_ms = epoch_ms;
+                        }
 
-                    GNSS_Data gps;
-                    if (app_state_get_latest_gps(&gps)) {
-                        st.gps_valid = (gps.is_valid == 1) ? 1 : 0;
-                    }
+                        GNSS_Data gps;
+                        if (app_state_get_latest_gps(&gps)) {
+                            st.gps_valid = (gps.is_valid == 1) ? 1 : 0;
+                        }
 
-                    app_ml_update_status(&st);
+                        app_ml_update_status(&st);
+                        next_infer_ms = now_ms + ML_INFER_PERIOD_MS;
 
-                    int64_t now_us = esp_timer_get_time();
-                    if (now_us - last_log_us > 5000000LL) {
-                        ESP_LOGI(TAG, "pred_raw=%d pred_smooth=%d conf=%.3f margin=%.3f unknown=%u",
-                                 st.pred_raw, st.pred_smooth, st.confidence, margin, is_unknown ? 1U : 0U);
-                        last_log_us = now_us;
+                        int64_t now_us = esp_timer_get_time();
+                        if (now_us - last_log_us > 5000000LL) {
+                            ESP_LOGI(TAG, "pred_raw=%d pred_smooth=%d conf=%.3f margin=%.3f unknown=%u",
+                                     st.pred_raw, st.pred_smooth, st.confidence, margin, is_unknown ? 1U : 0U);
+                            last_log_us = now_us;
+                        }
                     }
                 }
             }

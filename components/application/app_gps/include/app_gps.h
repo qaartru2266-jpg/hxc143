@@ -53,6 +53,7 @@ void app_gps_start(void);
 void app_gps_stop(void);
 void app_gps_resume(void);
 bool app_gps_is_running(void);
+void app_gps_set_force_active(bool active);
 
 #ifdef __cplusplus
 }

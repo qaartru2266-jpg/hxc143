@@ -46,6 +46,7 @@ void tsm_flush(TrafficStateMachine *tsm, int64_t uptime_ms);
 void tsm_input_mode(TrafficMode_t mode, float confidence, int64_t uptime_ms);
 void app_logic_start(void);
 void app_logic_flush(int64_t uptime_ms);
+void app_logic_set_enabled(bool enable);
 
 #ifdef __cplusplus
 }

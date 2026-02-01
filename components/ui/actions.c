@@ -5,6 +5,7 @@
 
 #include "app_datalog.h"
 #include "app_antenna.h"
+#include "app_force.h"
 #include "esp_log.h"
 #include "screens.h"
 
@@ -131,6 +132,48 @@ void action_on_subway_data_get(lv_event_t *e)
 {
     (void)e;
     update_datalog_state("subway");
+}
+
+void action_on_force_stationary(lv_event_t *e)
+{
+    (void)e;
+    app_force_enter(0, APP_FORCE_DEFAULT_DURATION_SEC, "ui");
+}
+
+void action_on_force_walk(lv_event_t *e)
+{
+    (void)e;
+    app_force_enter(1, APP_FORCE_DEFAULT_DURATION_SEC, "ui");
+}
+
+void action_on_force_bike(lv_event_t *e)
+{
+    (void)e;
+    app_force_enter(2, APP_FORCE_DEFAULT_DURATION_SEC, "ui");
+}
+
+void action_on_force_car(lv_event_t *e)
+{
+    (void)e;
+    app_force_enter(3, APP_FORCE_DEFAULT_DURATION_SEC, "ui");
+}
+
+void action_on_force_bus(lv_event_t *e)
+{
+    (void)e;
+    app_force_enter(4, APP_FORCE_DEFAULT_DURATION_SEC, "ui");
+}
+
+void action_on_force_subway(lv_event_t *e)
+{
+    (void)e;
+    app_force_enter(5, APP_FORCE_DEFAULT_DURATION_SEC, "ui");
+}
+
+void action_on_force_cancel(lv_event_t *e)
+{
+    (void)e;
+    app_force_cancel("cancel");
 }
 
 void action_on_wifi(lv_event_t *e)

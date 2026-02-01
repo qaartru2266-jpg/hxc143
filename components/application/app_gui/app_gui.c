@@ -20,11 +20,18 @@
 #include <stdio.h>
 #include <time.h>
 #include <stdbool.h>
+#include <math.h>
+
+#include "nvs.h"
+#include "nvs_flash.h"
 
 #include "app_touch.h"
 #include "app_power.h"
 #include "app_antenna.h"
+#include "app_time.h"
 #include "actions.h"
+#include "app_force.h"
+#include "app_datalog.h"
 #include "sdkconfig.h"
 #if CONFIG_JOFTMODE_ENABLE_ML
 #include "app_ml.h"
@@ -56,6 +63,9 @@ static size_t s_dma_bounce_size = 0;
 #define APP_GUI_USE_FULL_FB 1
 #define APP_GUI_REQUIRE_PSRAM 1
 #define APP_GUI_DMA_BOUNCE_LINES 8
+#define APP_GUI_CARBON_UPDATE_PERIOD_MS 15000
+#define APP_GUI_FISH_UNLOCK_COUNT 10
+#define APP_GUI_FISH_START_DATE_YYYYMMDD 20260202
 
 #if 0
 
@@ -88,26 +98,196 @@ static void update_time_vars(void)
     }
 
     char date_buf[11] = {0};
-    if (strftime(date_buf, sizeof(date_buf), "%Y/%m/%d", &local_tm) > 0) {
+    if (strftime(date_buf, sizeof(date_buf), "%y.%m.%d", &local_tm) > 0) {
         app_gui_set_flow_var_string(FLOW_GLOBAL_VARIABLE_CURRENT_DATE, date_buf);
     }
+}
+
+static int32_t days_from_civil(int y, unsigned m, unsigned d)
+{
+    y -= (m <= 2);
+    const int era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = (unsigned)(y - era * 400);
+    const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return (int32_t)(era * 146097 + (int)doe - 719468);
+}
+
+static bool get_today_yyyymmdd(int *out_yyyymmdd)
+{
+    if (!out_yyyymmdd) {
+        return false;
+    }
+    if (!app_time_is_valid()) {
+        return false;
+    }
+    time_t now = time(NULL);
+    if (now <= 0) {
+        return false;
+    }
+    struct tm tm_info;
+    if (!localtime_r(&now, &tm_info)) {
+        return false;
+    }
+    *out_yyyymmdd = (tm_info.tm_year + 1900) * 10000 +
+                    (tm_info.tm_mon + 1) * 100 +
+                    tm_info.tm_mday;
+    return true;
+}
+
+static void fish_unlock_write_ui(const uint8_t unlocks[APP_GUI_FISH_UNLOCK_COUNT])
+{
+    for (int i = 0; i < APP_GUI_FISH_UNLOCK_COUNT; ++i) {
+        app_gui_set_flow_var_int(FLOW_GLOBAL_VARIABLE_FISH_UNLOCK_01 + i, unlocks[i] ? 1 : 0);
+    }
+}
+
+static void fish_unlock_load(uint8_t unlocks[APP_GUI_FISH_UNLOCK_COUNT])
+{
+    memset(unlocks, 0, APP_GUI_FISH_UNLOCK_COUNT);
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open("fish_unlock", NVS_READONLY, &handle);
+    if (err == ESP_ERR_NVS_NOT_INITIALIZED) {
+        (void)nvs_flash_init();
+        err = nvs_open("fish_unlock", NVS_READONLY, &handle);
+    }
+    if (err != ESP_OK) {
+        return;
+    }
+    size_t len = APP_GUI_FISH_UNLOCK_COUNT;
+    err = nvs_get_blob(handle, "state", unlocks, &len);
+    if (err != ESP_OK || len != APP_GUI_FISH_UNLOCK_COUNT) {
+        memset(unlocks, 0, APP_GUI_FISH_UNLOCK_COUNT);
+    }
+    nvs_close(handle);
+}
+
+static void fish_unlock_save(const uint8_t unlocks[APP_GUI_FISH_UNLOCK_COUNT])
+{
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open("fish_unlock", NVS_READWRITE, &handle);
+    if (err == ESP_ERR_NVS_NOT_INITIALIZED) {
+        (void)nvs_flash_init();
+        err = nvs_open("fish_unlock", NVS_READWRITE, &handle);
+    }
+    if (err != ESP_OK) {
+        return;
+    }
+    (void)nvs_set_blob(handle, "state", unlocks, APP_GUI_FISH_UNLOCK_COUNT);
+    (void)nvs_commit(handle);
+    nvs_close(handle);
+}
+
+static void update_carbon_and_fish_vars(void)
+{
+    static int64_t last_update_ms = 0;
+    static bool fish_loaded = false;
+    static uint8_t fish_unlock[APP_GUI_FISH_UNLOCK_COUNT] = {0};
+    static int last_date = 0;
+    static bool last_date_valid = false;
+    static float last_total_co2 = 0.0f;
+
+    if (!fish_loaded) {
+        fish_unlock_load(fish_unlock);
+        fish_unlock_write_ui(fish_unlock);
+        fish_loaded = true;
+    }
+
+    int64_t now_ms = esp_timer_get_time() / 1000;
+    if (last_update_ms != 0 &&
+        (now_ms - last_update_ms) < APP_GUI_CARBON_UPDATE_PERIOD_MS) {
+        return;
+    }
+    last_update_ms = now_ms;
+
+    float total_co2_g = 0.0f;
+    if (!app_datalog_get_today_total_co2_g(&total_co2_g)) {
+        total_co2_g = 0.0f;
+    }
+
+    int ui_val = (int)ceilf(total_co2_g);
+    if (ui_val > 100) {
+        ui_val = 101;
+    } else if (ui_val < 0) {
+        ui_val = 0;
+    }
+    app_gui_set_flow_var_int(FLOW_GLOBAL_VARIABLE_TODAY_CARBONEMISSION, ui_val);
+
+    int today = 0;
+    bool today_valid = get_today_yyyymmdd(&today);
+    if (!today_valid) {
+        return;
+    }
+
+    bool time_valid = last_date_valid &&
+        today_valid &&
+        today >= APP_GUI_FISH_START_DATE_YYYYMMDD;
+
+    if (last_date == 0) {
+        last_date = today;
+        last_date_valid = true;
+        last_total_co2 = total_co2_g;
+        return;
+    }
+
+    if (!time_valid) {
+        last_date = today;
+        last_date_valid = true;
+        last_total_co2 = total_co2_g;
+        return;
+    }
+
+    if (today != last_date) {
+        int start_y = APP_GUI_FISH_START_DATE_YYYYMMDD / 10000;
+        int start_m = (APP_GUI_FISH_START_DATE_YYYYMMDD / 100) % 100;
+        int start_d = APP_GUI_FISH_START_DATE_YYYYMMDD % 100;
+        int last_y = last_date / 10000;
+        int last_m = (last_date / 100) % 100;
+        int last_d = last_date % 100;
+
+        int day_index = (days_from_civil(last_y, (unsigned)last_m, (unsigned)last_d) -
+                         days_from_civil(start_y, (unsigned)start_m, (unsigned)start_d)) + 1;
+
+        if (day_index >= 1 && day_index <= APP_GUI_FISH_UNLOCK_COUNT) {
+            fish_unlock[day_index - 1] = (last_total_co2 < 100.0f) ? 1U : 0U;
+            fish_unlock_save(fish_unlock);
+            fish_unlock_write_ui(fish_unlock);
+        }
+        last_date = today;
+        last_date_valid = true;
+        last_total_co2 = total_co2_g;
+        return;
+    }
+
+    last_total_co2 = total_co2_g;
 }
 
 #if CONFIG_JOFTMODE_ENABLE_ML
 static void update_mode_var(void)
 {
     static uint64_t last_uptime_ms = 0;
+    static uint32_t last_force_version = 0;
+    static int32_t last_mode_value = -999;
     app_ml_status_t st;
-    if (!app_ml_get_latest_status(&st)) {
-        return;
+    bool have_status = app_ml_get_latest_status(&st);
+    uint32_t force_version = app_force_get_version();
+    int32_t pred_mode = -1;
+    if (have_status && st.pred_smooth >= 0 && st.pred_smooth < 6) {
+        pred_mode = st.pred_smooth;
     }
-    if (st.uptime_ms == 0 || st.uptime_ms == last_uptime_ms) {
-        return;
-    }
-    last_uptime_ms = st.uptime_ms;
+    int32_t mode_value = app_force_get_current_mode(pred_mode);
+    bool uptime_changed = have_status && (st.uptime_ms != 0) && (st.uptime_ms != last_uptime_ms);
 
-    int32_t mode_value = (st.pred_smooth >= 0) ? st.pred_smooth : -1;
-    app_gui_set_flow_var_int(FLOW_GLOBAL_VARIABLE_MODE_LVGL, mode_value);
+    if (uptime_changed ||
+        force_version != last_force_version ||
+        mode_value != last_mode_value) {
+        app_gui_set_flow_var_int(FLOW_GLOBAL_VARIABLE_MODE_LVGL, mode_value);
+        last_force_version = force_version;
+        last_mode_value = mode_value;
+    }
+    if (have_status && st.uptime_ms != 0) {
+        last_uptime_ms = st.uptime_ms;
+    }
 }
 #endif
 
@@ -455,6 +635,7 @@ static void gui_task(void *arg)
     while (1) {
         lv_timer_handler();
         update_time_vars();
+        update_carbon_and_fish_vars();
 #if CONFIG_JOFTMODE_ENABLE_ML
         update_mode_var();
 #endif

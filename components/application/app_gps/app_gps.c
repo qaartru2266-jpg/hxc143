@@ -4,6 +4,7 @@
 #include <time.h>
 
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -13,6 +14,7 @@
 #include "app_state.h"
 #include "app_time.h"
 #include "app_control.h"
+#include "app_force.h"
 #include "gps_interface.h"
 
 static const char *TAG = "gps";
@@ -23,10 +25,15 @@ static size_t s_line_len = 0;
 static gps_parser_t s_parser;
 static TaskHandle_t s_gps_task = NULL;
 static volatile bool s_gps_enabled = true;
+static volatile bool s_force_active = false;
+static volatile bool s_request_immediate_attempt = false;
+static bool s_fix_acquired = false;
 
 #define GPS_TASK_PERIOD_MS 100
 #define GPS_TIME_SYNC_THRESHOLD_SEC 60
 #define GPS_NMEA_LOG_PERIOD_MS 8000
+#define GPS_WAKE_INTERVAL_MS (10 * 60 * 1000)
+#define GPS_FIX_TIMEOUT_MS 40000
 static TickType_t s_last_nmea_log = 0;
 
 static bool parse_two_digits(const char *text, int *out)
@@ -131,6 +138,9 @@ static void dispatch_sentence(const char *line)
     if (gps_parser_handle_sentence(&s_parser, line, &parsed)) {
         app_state_set_gps_data(&parsed);
         gps_try_sync_time(line, &parsed);
+        if (parsed.is_valid == 1) {
+            s_fix_acquired = true;
+        }
         ESP_LOGD(TAG, "GPS updated: lat=%.5f lon=%.5f speed=%.2f",
                  parsed.latitude, parsed.longitude, parsed.speed);
     }
@@ -173,15 +183,75 @@ static void app_gps_task(void *arg)
     // Wait for GNSS power to stabilize before UART traffic.
     vTaskDelay(pdMS_TO_TICKS(300));
 
+    bool gnss_on = false;
+    uint64_t next_wake_ms = 0;
+    uint64_t power_on_ms = 0;
+    bool last_force_active = false;
+
     while (1) {
-        if (!s_gps_enabled) {
+        app_force_poll();
+        uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000ULL);
+        bool force_active = s_force_active || app_force_is_active();
+
+        if (force_active) {
+            if (!last_force_active) {
+                gps_power_set(false);
+                gnss_on = false;
+                s_fix_acquired = false;
+                ESP_LOGI(TAG, "GNSS power off result=force next_wake_in=600s");
+            }
+            last_force_active = true;
             vTaskDelay(pdMS_TO_TICKS(GPS_TASK_PERIOD_MS));
             continue;
         }
+
+        if (last_force_active) {
+            last_force_active = false;
+            s_request_immediate_attempt = true;
+        }
+
+        if (!s_gps_enabled) {
+            if (gnss_on) {
+                gps_power_set(false);
+                gnss_on = false;
+            }
+            vTaskDelay(pdMS_TO_TICKS(GPS_TASK_PERIOD_MS));
+            continue;
+        }
+
+        if (s_request_immediate_attempt) {
+            next_wake_ms = now_ms;
+            s_request_immediate_attempt = false;
+        }
+
+        if (!gnss_on) {
+            if (next_wake_ms == 0) {
+                next_wake_ms = now_ms + GPS_WAKE_INTERVAL_MS;
+            }
+            if (now_ms >= next_wake_ms) {
+                gps_power_set(true);
+                gnss_on = true;
+                power_on_ms = now_ms;
+                s_fix_acquired = false;
+                ESP_LOGI(TAG, "GNSS power on");
+            }
+            vTaskDelay(pdMS_TO_TICKS(GPS_TASK_PERIOD_MS));
+            continue;
+        }
+
         memset(s_read_buf, 0, sizeof(s_read_buf));
         unsigned int len = GpsReadData(s_read_buf);
         if (len > 0) {
             process_buffer(s_read_buf, len);
+        }
+
+        if (s_fix_acquired || (now_ms - power_on_ms) >= GPS_FIX_TIMEOUT_MS) {
+            gps_power_set(false);
+            gnss_on = false;
+            next_wake_ms = now_ms + GPS_WAKE_INTERVAL_MS;
+            ESP_LOGI(TAG, "GNSS power off result=%s next_wake_in=600s",
+                     s_fix_acquired ? "fix" : "no_fix");
+            s_fix_acquired = false;
         }
 
         vTaskDelay(pdMS_TO_TICKS(GPS_TASK_PERIOD_MS));
@@ -207,11 +277,23 @@ void app_gps_stop(void)
 void app_gps_resume(void)
 {
     s_gps_enabled = true;
-    gps_power_set(true);
+    if (!s_force_active) {
+        s_request_immediate_attempt = true;
+    }
     ESP_LOGW(TAG, "gps resume");
 }
 
 bool app_gps_is_running(void)
 {
     return s_gps_enabled;
+}
+
+void app_gps_set_force_active(bool active)
+{
+    s_force_active = active;
+    if (active) {
+        gps_power_set(false);
+    } else {
+        s_request_immediate_attempt = true;
+    }
 }

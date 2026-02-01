@@ -68,6 +68,9 @@ void app_datalog_resume(void);
 bool app_datalog_is_running(void);
 void app_datalog_set_ml_enabled(bool enable);
 void app_datalog_set_summary_enabled(bool enable);
+void app_datalog_set_raw_logging_enabled(bool enable);
+void app_datalog_set_pred_logging_enabled(bool enable);
+bool app_datalog_get_today_total_co2_g(float *out_total);
 
 #ifdef __cplusplus
 }

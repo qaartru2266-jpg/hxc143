@@ -16,6 +16,7 @@
 #include "driver/spi_common.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_attr.h"
 #include "esp_timer.h"
 #include "esp_vfs_fat.h"
 #include "freertos/FreeRTOS.h"
@@ -28,6 +29,7 @@
 #include "app_state.h"
 #include "app_time.h"
 #include "app_sdcard.h"
+#include "app_force.h"
 #include "app_vibration.h"
 #if CONFIG_JOFTMODE_ENABLE_ML
 #include "app_ml.h"
@@ -61,7 +63,8 @@
 #define EVENT_TASK_STACK 4096
 #define EVENT_TASK_PRIO 5
 #define EVENT_LOG_INTERVAL_MS 1000
-#define EVENT_SWITCH_CONFIRM 4
+#define EVENT_SWITCH_CONFIRM 3
+#define EVENT_MIN_DURATION_MS 10000
 #define SUMMARY_PERIOD_MS 210000
 #define SUMMARY_MODE_COUNT 6
 #define CARBON_FACTOR_STATIONARY 0.0f
@@ -87,6 +90,7 @@
 #define PATH_BUF_SIZE 128
 #define DATETIME_BUF_SIZE 24
 #define FLOAT_BUF_SIZE 16
+#define SUMMARY_LOG_BUF_SIZE 512
 
 static QueueHandle_t s_raw_queue = NULL;
 static TaskHandle_t s_logger_task = NULL;
@@ -100,21 +104,25 @@ static volatile bool s_datalog_stop_requested = false;
 static volatile bool s_default_raw_enabled = true;
 static volatile bool s_ml_enabled = true;
 static volatile bool s_summary_write_enabled = true;
+static volatile bool s_raw_write_enabled = true;
+static volatile bool s_pred_write_enabled = true;
+static char s_summary_trigger[16] = "unknown";
 
 static FILE *s_raw_file = NULL;
-static char s_raw_file_buf[FILE_BUF_SIZE];
+static DMA_ATTR char s_raw_file_buf[FILE_BUF_SIZE];
 static char s_raw_dir[DIR_BUF_SIZE];
 static char s_raw_name[FILE_NAME_SIZE];
 static uint32_t s_raw_lines_since_flush = 0;
 static uint32_t s_raw_flushes_since_sync = 0;
 static volatile uint32_t s_raw_dropped = 0;
 static FILE *s_pred_file = NULL;
-static char s_pred_file_buf[FILE_BUF_SIZE];
+static DMA_ATTR char s_pred_file_buf[FILE_BUF_SIZE];
 static char s_pred_dir[DIR_BUF_SIZE];
 static char s_pred_name[FILE_NAME_SIZE];
 static uint32_t s_pred_lines_since_flush = 0;
 static uint32_t s_pred_flushes_since_sync = 0;
-static char s_summary_file_buf[FILE_BUF_SIZE];
+static DMA_ATTR char s_summary_file_buf[FILE_BUF_SIZE];
+static DMA_ATTR char s_event_file_buf[FILE_BUF_SIZE];
 static int s_event_current_mode = -1;
 static int s_event_pending_mode = -1;
 static uint32_t s_event_pending_count = 0;
@@ -167,6 +175,7 @@ static void datalog_close_raw_file(void);
 static void datalog_close_pred_file(void);
 static bool datalog_ensure_dir(const char *dir);
 static esp_err_t datalog_mount(void);
+static void datalog_set_summary_trigger(const char *trigger);
 
 static void datalog_lock(void)
 {
@@ -306,6 +315,31 @@ static void datalog_format_time_hms(int64_t epoch_ms, char *out, size_t out_sz)
     snprintf(out, out_sz, "%02d:%02d:%02d", tm_info.tm_hour, tm_info.tm_min, tm_info.tm_sec);
 }
 
+static void datalog_format_date_ymd(char *out, size_t out_sz)
+{
+    if (!out || out_sz == 0) {
+        return;
+    }
+    if (!app_time_is_valid()) {
+        snprintf(out, out_sz, "NA");
+        return;
+    }
+    time_t now = time(NULL);
+    if (now <= 0) {
+        snprintf(out, out_sz, "NA");
+        return;
+    }
+    struct tm tm_info;
+    if (!localtime_r(&now, &tm_info)) {
+        snprintf(out, out_sz, "NA");
+        return;
+    }
+    snprintf(out, out_sz, "%04d-%02d-%02d",
+             tm_info.tm_year + 1900,
+             tm_info.tm_mon + 1,
+             tm_info.tm_mday);
+}
+
 static const char *datalog_mode_label(int mode)
 {
     switch (mode) {
@@ -355,6 +389,14 @@ static void datalog_copy_token(char *dst, size_t dst_sz, const char *src)
     }
     strncpy(dst, src, dst_sz - 1);
     dst[dst_sz - 1] = '\0';
+}
+
+static void datalog_set_summary_trigger(const char *trigger)
+{
+    if (!trigger || trigger[0] == '\0') {
+        trigger = "unknown";
+    }
+    datalog_copy_token(s_summary_trigger, sizeof(s_summary_trigger), trigger);
 }
 
 static bool datalog_format_session_label(const char *label, char *out, size_t out_sz)
@@ -879,6 +921,9 @@ static void datalog_close_pred_file(void)
 
 static void datalog_write_raw(const DatalogRaw_t *raw)
 {
+    if (!s_raw_write_enabled) {
+        return;
+    }
     if (!datalog_session_is_active() && !s_default_raw_enabled) {
         return;
     }
@@ -1129,8 +1174,9 @@ static void datalog_update_summary(int mode, float duration_sec)
     s_summary_co2_g[mode] += duration_min * datalog_mode_factor(mode);
 }
 
-static void datalog_write_summary_snapshot(uint64_t now_ms)
+static void datalog_write_summary_snapshot(uint64_t now_ms, const char *trigger)
 {
+    datalog_set_summary_trigger(trigger);
     float duration_min[SUMMARY_MODE_COUNT];
     float co2_g[SUMMARY_MODE_COUNT];
     for (int i = 0; i < SUMMARY_MODE_COUNT; ++i) {
@@ -1204,36 +1250,90 @@ static void event_logger_task(void *arg)
     TickType_t last_wake = xTaskGetTickCount();
     uint64_t last_summary_ms = 0;
     bool events_ready = false;
+    uint32_t last_force_version = app_force_get_version();
 
     while (1) {
         if (s_datalog_enabled && s_ml_enabled) {
-            app_ml_status_t st;
-            if (app_ml_get_latest_status(&st) && st.uptime_ms != 0) {
-                if (!events_ready) {
-                    datalog_ensure_events_file();
-                    events_ready = true;
+            app_ml_status_t st = {0};
+            bool have_status = app_ml_get_latest_status(&st);
+            uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000ULL);
+            int64_t epoch_ms = 0;
+            (void)datalog_get_epoch_ms(&epoch_ms);
+
+            if (!events_ready) {
+                datalog_ensure_events_file();
+                events_ready = true;
+            }
+
+            int pred_mode = have_status ? st.pred_smooth : -1;
+            int mode = app_force_get_current_mode(pred_mode);
+            uint32_t force_version = app_force_get_version();
+            bool force_changed = (force_version != last_force_version);
+            if (force_changed) {
+                last_force_version = force_version;
+            }
+
+            if (mode >= 0 && mode < SUMMARY_MODE_COUNT) {
+                GNSS_Data gps;
+                bool gps_valid = false;
+                float speed = 0.0f;
+                if (app_state_get_latest_gps(&gps) && gps.is_valid == 1) {
+                    gps_valid = true;
+                    speed = gps.speed;
                 }
-                int mode = st.pred_smooth;
-                if (mode >= 0 && mode < SUMMARY_MODE_COUNT) {
-                    GNSS_Data gps;
-                    bool gps_valid = false;
-                    float speed = 0.0f;
-                    if (app_state_get_latest_gps(&gps) && gps.is_valid == 1) {
-                        gps_valid = true;
-                        speed = gps.speed;
+
+                bool force_switched = false;
+                if (force_changed && s_event_current_mode >= 0) {
+                    int old_mode = s_event_current_mode;
+                    DatalogEvent_t ev;
+                    memset(&ev, 0, sizeof(ev));
+                    datalog_format_time_hms(s_event_start_epoch_ms, ev.start_time, sizeof(ev.start_time));
+                    datalog_format_time_hms(epoch_ms, ev.end_time, sizeof(ev.end_time));
+                    ev.start_uptime_ms = (int64_t)s_event_start_uptime_ms;
+                    ev.end_uptime_ms = (int64_t)now_ms;
+                    ev.duration_sec = (float)((double)(now_ms - s_event_start_uptime_ms) / 1000.0);
+                    datalog_copy_token(ev.mode, sizeof(ev.mode), datalog_mode_label(old_mode));
+                    if (s_event_speed_samples > 0) {
+                        ev.avg_speed_mps = s_event_speed_sum / (float)s_event_speed_samples;
+                    } else {
+                        ev.avg_speed_mps = NAN;
+                    }
+                    app_datalog_log_event(&ev);
+                    datalog_update_summary(old_mode, ev.duration_sec);
+                    datalog_write_summary_snapshot(now_ms, "switch");
+
+                    ESP_LOGI(TAG, "event switch %s->%s duration=%.1fs candidate=%u",
+                             datalog_mode_label(old_mode),
+                             datalog_mode_label(mode),
+                             ev.duration_sec,
+                             (unsigned int)s_event_pending_count);
+
+                    if (mode == 3 || mode == 4 || mode == 5) {
+                        app_vibration_pulse_ms(120);
                     }
 
+                    s_event_current_mode = mode;
+                    s_event_start_uptime_ms = now_ms;
+                    s_event_start_epoch_ms = epoch_ms;
+                    s_event_speed_sum = 0.0f;
+                    s_event_speed_samples = 0;
+                    s_event_pending_mode = -1;
+                    s_event_pending_count = 0;
+                    force_switched = true;
+                }
+
+                if (!force_switched) {
                     if (s_event_current_mode < 0) {
                         s_event_current_mode = mode;
-                        s_event_start_uptime_ms = st.uptime_ms;
-                        s_event_start_epoch_ms = st.datetime_local_ms;
+                        s_event_start_uptime_ms = now_ms;
+                        s_event_start_epoch_ms = epoch_ms;
                         s_event_speed_sum = 0.0f;
                         s_event_speed_samples = 0;
                         s_event_pending_mode = -1;
                         s_event_pending_count = 0;
-                    }
-
-                    if (mode == s_event_current_mode) {
+                        ESP_LOGI(TAG, "event start %s->%s duration=0.0s candidate=0",
+                                 datalog_mode_label(-1), datalog_mode_label(mode));
+                    } else if (mode == s_event_current_mode) {
                         s_event_pending_mode = -1;
                         s_event_pending_count = 0;
                     } else {
@@ -1244,50 +1344,97 @@ static void event_logger_task(void *arg)
                             s_event_pending_count++;
                         }
 
-                        if (s_event_pending_count >= EVENT_SWITCH_CONFIRM) {
+                        uint64_t duration_ms = 0;
+                        if (now_ms > s_event_start_uptime_ms) {
+                            duration_ms = now_ms - s_event_start_uptime_ms;
+                        }
+
+                        if (duration_ms >= EVENT_MIN_DURATION_MS &&
+                            s_event_pending_count >= EVENT_SWITCH_CONFIRM) {
+                            int old_mode = s_event_current_mode;
+                            uint32_t candidate_count = s_event_pending_count;
                             DatalogEvent_t ev;
                             memset(&ev, 0, sizeof(ev));
                             datalog_format_time_hms(s_event_start_epoch_ms, ev.start_time, sizeof(ev.start_time));
-                            datalog_format_time_hms(st.datetime_local_ms, ev.end_time, sizeof(ev.end_time));
+                            datalog_format_time_hms(epoch_ms, ev.end_time, sizeof(ev.end_time));
                             ev.start_uptime_ms = (int64_t)s_event_start_uptime_ms;
-                            ev.end_uptime_ms = (int64_t)st.uptime_ms;
-                            ev.duration_sec = (float)((st.uptime_ms - s_event_start_uptime_ms) / 1000.0);
-                            datalog_copy_token(ev.mode, sizeof(ev.mode), datalog_mode_label(s_event_current_mode));
+                            ev.end_uptime_ms = (int64_t)now_ms;
+                            ev.duration_sec = (float)((double)duration_ms / 1000.0);
+                            datalog_copy_token(ev.mode, sizeof(ev.mode), datalog_mode_label(old_mode));
                             if (s_event_speed_samples > 0) {
                                 ev.avg_speed_mps = s_event_speed_sum / (float)s_event_speed_samples;
                             } else {
                                 ev.avg_speed_mps = NAN;
                             }
                             app_datalog_log_event(&ev);
-                            datalog_update_summary(s_event_current_mode, ev.duration_sec);
-                            datalog_write_summary_snapshot(st.uptime_ms);
+                            datalog_update_summary(old_mode, ev.duration_sec);
+                            datalog_write_summary_snapshot(now_ms, "switch");
+
+                            ESP_LOGI(TAG, "event switch %s->%s duration=%.1fs candidate=%u",
+                                     datalog_mode_label(old_mode),
+                                     datalog_mode_label(mode),
+                                     ev.duration_sec,
+                                     (unsigned int)candidate_count);
 
                             if (mode == 3 || mode == 4 || mode == 5) {
                                 app_vibration_pulse_ms(120);
                             }
 
                             s_event_current_mode = mode;
-                            s_event_start_uptime_ms = st.uptime_ms;
-                            s_event_start_epoch_ms = st.datetime_local_ms;
+                            s_event_start_uptime_ms = now_ms;
+                            s_event_start_epoch_ms = epoch_ms;
                             s_event_speed_sum = 0.0f;
                             s_event_speed_samples = 0;
                             s_event_pending_mode = -1;
                             s_event_pending_count = 0;
                         }
                     }
-
-                    if (gps_valid) {
-                        s_event_speed_sum += speed;
-                        s_event_speed_samples++;
-                    }
-
-                    if (last_summary_ms == 0) {
-                        last_summary_ms = st.uptime_ms;
-                    } else if (st.uptime_ms - last_summary_ms >= SUMMARY_PERIOD_MS) {
-                        datalog_write_summary_snapshot(st.uptime_ms);
-                        last_summary_ms = st.uptime_ms;
-                    }
                 }
+
+                if (gps_valid) {
+                    s_event_speed_sum += speed;
+                    s_event_speed_samples++;
+                }
+
+                if (last_summary_ms == 0) {
+                    last_summary_ms = now_ms;
+                } else if (now_ms - last_summary_ms >= SUMMARY_PERIOD_MS) {
+                    datalog_write_summary_snapshot(now_ms, "periodic");
+                    last_summary_ms = now_ms;
+                }
+            } else {
+                if (force_changed && s_event_current_mode >= 0) {
+                    int old_mode = s_event_current_mode;
+                    DatalogEvent_t ev;
+                    memset(&ev, 0, sizeof(ev));
+                    datalog_format_time_hms(s_event_start_epoch_ms, ev.start_time, sizeof(ev.start_time));
+                    datalog_format_time_hms(epoch_ms, ev.end_time, sizeof(ev.end_time));
+                    ev.start_uptime_ms = (int64_t)s_event_start_uptime_ms;
+                    ev.end_uptime_ms = (int64_t)now_ms;
+                    ev.duration_sec = (float)((double)(now_ms - s_event_start_uptime_ms) / 1000.0);
+                    datalog_copy_token(ev.mode, sizeof(ev.mode), datalog_mode_label(old_mode));
+                    if (s_event_speed_samples > 0) {
+                        ev.avg_speed_mps = s_event_speed_sum / (float)s_event_speed_samples;
+                    } else {
+                        ev.avg_speed_mps = NAN;
+                    }
+                    app_datalog_log_event(&ev);
+                    datalog_update_summary(old_mode, ev.duration_sec);
+                    datalog_write_summary_snapshot(now_ms, "switch");
+
+                    ESP_LOGI(TAG, "event switch %s->unknown duration=%.1fs candidate=%u",
+                             datalog_mode_label(old_mode),
+                             ev.duration_sec,
+                             (unsigned int)s_event_pending_count);
+
+                    s_event_current_mode = -1;
+                    s_event_start_uptime_ms = 0;
+                    s_event_start_epoch_ms = 0;
+                    s_event_speed_sum = 0.0f;
+                    s_event_speed_samples = 0;
+                }
+                s_event_pending_mode = -1;
+                s_event_pending_count = 0;
             }
         }
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(EVENT_LOG_INTERVAL_MS));
@@ -1461,6 +1608,29 @@ bool app_datalog_is_running(void)
     return s_datalog_enabled;
 }
 
+bool app_datalog_get_today_total_co2_g(float *out_total)
+{
+    if (!out_total) {
+        return false;
+    }
+    float total = 0.0f;
+    for (int i = 0; i < SUMMARY_MODE_COUNT; ++i) {
+        total += s_summary_co2_g[i];
+    }
+
+    if (s_event_current_mode >= 0 && s_event_current_mode < SUMMARY_MODE_COUNT &&
+        s_event_start_uptime_ms > 0) {
+        uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000ULL);
+        if (now_ms > s_event_start_uptime_ms) {
+            float add_min = (float)((now_ms - s_event_start_uptime_ms) / 1000.0 / 60.0);
+            total += add_min * datalog_mode_factor(s_event_current_mode);
+        }
+    }
+
+    *out_total = total;
+    return true;
+}
+
 void app_datalog_set_ml_enabled(bool enable)
 {
     s_ml_enabled = enable;
@@ -1469,6 +1639,40 @@ void app_datalog_set_ml_enabled(bool enable)
 void app_datalog_set_summary_enabled(bool enable)
 {
     s_summary_write_enabled = enable;
+}
+
+void app_datalog_set_raw_logging_enabled(bool enable)
+{
+    if (s_raw_write_enabled == enable) {
+        return;
+    }
+    s_raw_write_enabled = enable;
+    if (!enable) {
+        if (app_sdcard_lock_fs(pdMS_TO_TICKS(1000))) {
+            datalog_close_raw_file();
+            app_sdcard_unlock_fs();
+        }
+        ESP_LOGI(TAG, "raw logger disabled");
+    } else {
+        ESP_LOGI(TAG, "raw logger enabled");
+    }
+}
+
+void app_datalog_set_pred_logging_enabled(bool enable)
+{
+    if (s_pred_write_enabled == enable) {
+        return;
+    }
+    s_pred_write_enabled = enable;
+    if (!enable) {
+        if (app_sdcard_lock_fs(pdMS_TO_TICKS(1000))) {
+            datalog_close_pred_file();
+            app_sdcard_unlock_fs();
+        }
+        ESP_LOGI(TAG, "pred logger disabled");
+    } else {
+        ESP_LOGI(TAG, "pred logger enabled");
+    }
 }
 
 void app_datalog_enqueue_raw(const DatalogRaw_t *raw_data)
@@ -1522,8 +1726,7 @@ void app_datalog_log_event(const DatalogEvent_t *event)
         return;
     }
 
-    char buf[FILE_BUF_SIZE];
-    if (setvbuf(f, buf, _IOFBF, sizeof(buf)) != 0) {
+    if (setvbuf(f, s_event_file_buf, _IOFBF, sizeof(s_event_file_buf)) != 0) {
         ESP_LOGW(TAG, "event setvbuf failed");
     }
 
@@ -1580,6 +1783,9 @@ esp_err_t app_datalog_log_pred(const DatalogPred_t *pred)
     if (!pred) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (!s_pred_write_enabled) {
+        return ESP_OK;
+    }
     if (!s_datalog_enabled) {
         return ESP_ERR_INVALID_STATE;
     }
@@ -1629,6 +1835,7 @@ void app_datalog_save_summary(const DatalogSummary_t *summary)
     if (!summary) {
         return;
     }
+    datalog_set_summary_trigger("manual");
     (void)app_datalog_save_summary_batch(summary, 1);
 }
 
@@ -1700,6 +1907,32 @@ esp_err_t app_datalog_save_summary_batch(const DatalogSummary_t *rows, size_t co
     }
 
     fprintf(f, "TOTAL,%.2f,,%.2f\r\n", total_duration_min, total_co2);
+
+    char date[12];
+    datalog_format_date_ymd(date, sizeof(date));
+    const char *trigger = s_summary_trigger[0] ? s_summary_trigger : "unknown";
+    char log_line[SUMMARY_LOG_BUF_SIZE];
+    size_t used = 0;
+    used += (size_t)snprintf(log_line + used, sizeof(log_line) - used,
+                             "summary write date=%s trigger=%s total_min=%.2f",
+                             date, trigger, total_duration_min);
+    for (size_t i = 0; i < count && used < sizeof(log_line); ++i) {
+        char mode[sizeof(rows[i].mode)];
+        datalog_copy_token(mode, sizeof(mode), rows[i].mode);
+        if (mode[0] == '\0') {
+            continue;
+        }
+        int wrote = snprintf(log_line + used, sizeof(log_line) - used,
+                             " %s=%.2f", mode, rows[i].total_duration_min);
+        if (wrote < 0) {
+            break;
+        }
+        used += (size_t)wrote;
+        if (used >= sizeof(log_line)) {
+            break;
+        }
+    }
+    ESP_LOGI(TAG, "%s", log_line);
 
     fflush(f);
     (void)fsync(fileno(f));

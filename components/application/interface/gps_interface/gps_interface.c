@@ -37,7 +37,7 @@ void gps_init(void)
         .pull_up_en = GPIO_PULLUP_DISABLE,
     };
     gpio_config(&io_conf);
-    gpio_set_level(GNSS_EN_PIN, 0);
+    gpio_set_level(GNSS_EN_PIN, 1);
 }
 
 void gps_power_set(bool enable)

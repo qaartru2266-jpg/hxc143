@@ -23,6 +23,7 @@
 #include "app_antenna.h"
 #include "app_time.h"
 #include "app_imu_calib.h"
+#include "app_logic.h"
 #include "app_quiet.h"
 #include "sdkconfig.h"
 
@@ -41,6 +42,8 @@ void app_main(void)
     app_time_start();
     app_imu_calib_init();
     app_quiet_start();
+    app_logic_set_enabled(false);
+    ESP_LOGI("app_main", "summary writer=app_datalog");
 
     app_axis6_start();
     app_gps_start();
@@ -52,7 +55,6 @@ void app_main(void)
         app_datalog_set_ml_enabled(false);
     }
     app_datalog_start();
-    app_datalog_set_summary_enabled(false);
     printf("MODE: DATA_COLLECTION (MOCK disabled)\n");
 #if DEV_DISABLE_DEFAULT_RAW_ON_BOOT
     app_datalog_set_default_raw_enabled(false);

@@ -4,6 +4,7 @@
 #include <string.h>
 #include <sys/unistd.h>
 
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -40,7 +41,7 @@ static bool s_mounted = false;
 static sdmmc_card_t *s_card = NULL;
 static FILE *s_csv = NULL;
 static char s_csv_path[64] = {0};
-static char s_csv_buf[4096];
+static DMA_ATTR char s_csv_buf[4096];
 static bool s_ready = false;
 static SemaphoreHandle_t s_fs_mutex = NULL;
 
